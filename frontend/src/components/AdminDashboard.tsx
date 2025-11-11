@@ -16,7 +16,7 @@ import {
 } from '@mui/material';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import SendIcon from '@mui/icons-material/Send';
-import { manualTransferToSafe, getProvider } from '../services/ethers.service';
+import { manualTransferToSafe, getProvider, isConnectedToSafe } from '../services/ethers.service';
 import { useWallet } from '../hooks/useWallet';
 import { useContract } from '../hooks/useContract';
 import { SAFE_ADDRESS } from '../constants/contractAddress';
@@ -46,8 +46,29 @@ export const AdminDashboard: React.FC = () => {
 
       setIsCheckingOwner(true);
       try {
+        // QUAN TRỌNG: Nếu đang dùng Safe Wallet, address là Safe address
+        // Cần check xem address có phải là Safe address không
+        const isUsingSafeWallet = isConnectedToSafe();
+        
+        if (isUsingSafeWallet) {
+          // Khi dùng Safe Wallet, address là Safe address
+          // Check xem address có match với SAFE_ADDRESS không
+          if (SAFE_ADDRESS && address.toLowerCase() === SAFE_ADDRESS.toLowerCase()) {
+            // Đây là Safe address - có quyền gọi updateSafe()
+            setIsSafeOwner(true);
+            setSafeOwners([]); // Không cần load owners
+            setIsCheckingOwner(false);
+            return;
+          }
+        }
+
+        // Nếu không dùng Safe Wallet, check xem có phải owner không
         const provider = getProvider();
-        if (!provider) return;
+        if (!provider) {
+          setIsSafeOwner(false);
+          setIsCheckingOwner(false);
+          return;
+        }
 
         const { ethers } = await import('ethers');
         const safeABI = ['function getOwners() external view returns (address[])'];
@@ -55,11 +76,18 @@ export const AdminDashboard: React.FC = () => {
         const owners = await safeContract.getOwners();
 
         setSafeOwners(owners);
+        
+        // Check xem address có phải là owner hoặc Safe address không
         const isOwner = owners.some(
           (owner: string) => owner.toLowerCase() === address.toLowerCase()
         );
-        setIsSafeOwner(isOwner);
-      } catch {
+        
+        // Hoặc address có phải là Safe address không
+        const isSafeAddress = SAFE_ADDRESS && address.toLowerCase() === SAFE_ADDRESS.toLowerCase();
+        
+        setIsSafeOwner(isOwner || isSafeAddress);
+      } catch (error) {
+        console.error('Error checking Safe owner:', error);
         setIsSafeOwner(false);
       } finally {
         setIsCheckingOwner(false);
@@ -252,11 +280,19 @@ export const AdminDashboard: React.FC = () => {
         <DialogTitle>Confirm Transfer</DialogTitle>
         <DialogContent>
           <Typography>
-            Transfer <strong>{parseFloat(amountEth || '0').toFixed(6)} ETH</strong> to the Safe?
+            Transfer <strong>{parseFloat(amountEth || '0').toFixed(6)} ETH</strong> from contract to Safe?
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            This will withdraw funds from the contract and send them to the Safe address.
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             Safe address: {SAFE_ADDRESS}
           </Typography>
+          {isConnectedToSafe() && (
+            <Typography variant="body2" color="warning.main" sx={{ mt: 1, fontWeight: 'bold' }}>
+              ⚠️ Using Safe Wallet: Transaction will be proposed and requires approval from Safe owners.
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmDialog(false)}>Cancel</Button>
@@ -279,13 +315,29 @@ export const AdminDashboard: React.FC = () => {
           variant="filled"
         >
           <Box>
-            <Typography variant="subtitle2" gutterBottom>Transfer Successful!</Typography>
+            <Typography variant="subtitle2" gutterBottom>
+              {isConnectedToSafe() ? 'Transaction Proposed!' : 'Transfer Successful!'}
+            </Typography>
             <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
               Amount: {parseFloat(amountEth).toFixed(6)} ETH
             </Typography>
-            <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
-              TX: {txHash}
-            </Typography>
+            {isConnectedToSafe() ? (
+              <>
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Transaction has been proposed to Safe Wallet.
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 0.5 }}>
+                  It requires approval from Safe owners before execution.
+                </Typography>
+                <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
+                  Safe TX Hash: {txHash}
+                </Typography>
+              </>
+            ) : (
+              <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
+                TX: {txHash}
+              </Typography>
+            )}
             <Button 
               size="small" 
               color="inherit" 

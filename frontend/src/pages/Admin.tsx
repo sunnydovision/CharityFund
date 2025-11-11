@@ -1,11 +1,36 @@
 import React from 'react';
-import { Container, Box, Typography, Grid } from '@mui/material';
+import { Container, Box, Typography, Grid, Alert } from '@mui/material';
+import { Navigate } from 'react-router-dom';
 import { WalletConnect } from '../components/WalletConnect';
 import { ContractInfo } from '../components/ContractInfo';
 import { AdminDashboard } from '../components/AdminDashboard';
 import { DonationHistory } from '../components/DonationHistory';
+import { isConnectedToSafe } from '../services/ethers.service';
+import { useWallet } from '../hooks/useWallet';
 
 export const Admin: React.FC = () => {
+  const { isConnected } = useWallet();
+  const isSafeConnected = isConnectedToSafe();
+
+  // Nếu không dùng Safe Wallet, redirect về home
+  if (isConnected && !isSafeConnected) {
+    return (
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Admin page chỉ dành cho Safe Wallet
+          </Typography>
+          <Typography variant="body2">
+            Vui lòng kết nối Safe Wallet để truy cập trang Admin.
+            <br />
+            MetaMask không có quyền truy cập trang này.
+          </Typography>
+        </Alert>
+        <Navigate to="/" replace />
+      </Container>
+    );
+  }
+
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Box textAlign="center" mb={4}>

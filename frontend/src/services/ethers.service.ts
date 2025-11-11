@@ -38,22 +38,34 @@ let safeSDKInitialized = false;
 
 const initializeSafeSDK = async () => {
   if (safeSDKInitialized && safeSdk) return;
-  
+
+  // Kiểm tra xem có global Safe SDK không (từ index.html hoặc main.tsx)
+  if (typeof window !== 'undefined') {
+    const globalSDK = (window as any).__SAFE_APP_SDK__ || (window as any).safeSDK;
+    if (globalSDK) {
+      // Sử dụng global SDK nếu có
+      safeSdk = globalSDK;
+      safeSDKInitialized = true;
+      console.log('Using global Safe SDK from window');
+      return;
+    }
+  }
+
   // Chỉ khởi tạo nếu đang trong iframe (Safe Wallet)
   if (typeof window === 'undefined' || window.self === window.top) {
     return;
   }
-  
+
   try {
     // Lazy load Safe SDK với dynamic import
     const SafeAppsSDKModule = await import('@safe-global/safe-apps-sdk');
     const SafeAppsSDK = SafeAppsSDKModule.default || SafeAppsSDKModule;
-    
+
     // Khởi tạo SDK - Safe sẽ detect điều này
     // Không cần options, SDK sẽ tự động detect môi trường
     safeSdk = new SafeAppsSDK();
     safeSDKInitialized = true;
-    
+
     console.log('Safe Apps SDK initialized');
   } catch (e: any) {
     // Log lỗi nhưng không throw - app vẫn có thể chạy không có Safe
@@ -468,7 +480,49 @@ export const connectSafeWallet = async (): Promise<{
 
 // Check if currently connected to Safe Wallet
 export const isConnectedToSafe = (): boolean => {
-  return isSafeWallet;
+  // Nếu đã set isSafeWallet = true, return true
+  if (isSafeWallet) {
+    return true;
+  }
+  
+  // Nếu đang trong iframe, có thể đang dùng Safe Wallet
+  if (typeof window !== 'undefined' && window.self !== window.top) {
+    // Đang trong iframe - có thể là Safe Wallet
+    // Nếu có safeSdk và safeInfo, chắc chắn là Safe Wallet
+    if (safeSdk && safeInfo) {
+      return true;
+    }
+    
+    // Nếu có safeSdk (đã được initialize), có thể đang trong Safe Wallet
+    // Safe SDK chỉ được initialize khi app được load trong Safe Wallet iframe
+    if (safeSdk) {
+      // Có Safe SDK - có thể đang trong Safe Wallet
+      // Nhưng chưa có safeInfo, có thể chưa handshake thành công
+      // Tuy nhiên, nếu đang trong iframe và có SDK, có thể coi như Safe Wallet
+      // Vì Safe SDK chỉ được khởi tạo khi trong Safe Wallet environment
+      return true;
+    }
+    
+    // Nếu đang trong iframe nhưng chưa có SDK, check xem có global SDK không
+    // (từ index.html hoặc main.tsx)
+    if ((window as any).__SAFE_APP_SDK__ || (window as any).safeSDK) {
+      // Có global Safe SDK - đang trong Safe Wallet environment
+      return true;
+    }
+    
+    // Nếu đang trong iframe và URL có chứa "safe.global", có thể là Safe Wallet
+    try {
+      const parentUrl = document.referrer || window.location.href;
+      if (parentUrl.includes('safe.global') || parentUrl.includes('app.safe.global')) {
+        // Đang trong Safe Wallet iframe
+        return true;
+      }
+    } catch (e) {
+      // Cross-origin check có thể fail, nhưng đó là OK
+    }
+  }
+  
+  return false;
 };
 
 // Switch network
@@ -620,18 +674,87 @@ export const isAboveThreshold = async (): Promise<boolean> => {
 
 
 // NEW: amountEth is a string like "0.005"
+// Function này lấy tiền TỪ contract và gửi TỚI Safe address
 export async function manualTransferToSafe(amountEth: string): Promise<string> {
-  const contract = getContract();
-  if (!contract) return '';
+  if (!CONTRACT_ADDRESS) {
+    throw new Error('Contract address not set');
+  }
 
   // Validate & convert ETH → wei (BigInt)
   const amountWei = ethers.parseEther(amountEth); // throws if invalid
   if (amountWei <= 0n) throw new Error('Amount must be greater than 0');
 
-  // Your Solidity now expects the raw wei amount (no * 1 ether inside)
-  const tx = await contract.manualTransferToSafe(amountWei);
-  const receipt = await tx.wait();
-  return receipt?.hash ?? tx.hash;
+  // QUAN TRỌNG: Nếu đang dùng Safe Wallet, cần dùng Safe SDK txs API
+  // Vì Safe App Provider không hỗ trợ sendTransaction trực tiếp
+  if (isSafeWallet && safeSdk) {
+    try {
+      console.log('🔷 Using Safe Wallet SDK to create transaction proposal...');
+      console.log('📞 Will call contract.manualTransferToSafe() to transfer funds FROM contract TO Safe');
+      console.log(`💰 Amount: ${amountEth} ETH (${amountWei.toString()} wei)`);
+      
+      // Dùng Safe SDK txs API để tạo transaction proposal
+      // Transaction này sẽ gọi contract.manualTransferToSafe(amountWei) từ Safe address
+      // Function này sẽ transfer tiền TỪ contract TỚI Safe address (đã được set trong contract)
+      
+      // Encode function call data: manualTransferToSafe(uint256 amount)
+      const contractInterface = new ethers.Interface(CHARITY_FUND_ABI);
+      const data = contractInterface.encodeFunctionData('manualTransferToSafe', [amountWei]);
+      
+      console.log('📝 Encoded function data:', data);
+      console.log('🎯 Target contract:', CONTRACT_ADDRESS);
+      
+      // Tạo transaction proposal qua Safe SDK
+      // Transaction này sẽ được gửi từ Safe address và gọi contract.manualTransferToSafe()
+      const safeTransaction = await safeSdk.txs.send({
+        txs: [
+          {
+            to: CONTRACT_ADDRESS, // Gọi function trên contract này
+            value: '0', // Không gửi ETH, chỉ gọi function
+            data: data, // Encoded function call: manualTransferToSafe(amountWei)
+          },
+        ],
+      });
+      
+      console.log('✅ Safe transaction proposed successfully!');
+      console.log('📋 Safe TX Hash:', safeTransaction.safeTxHash);
+      console.log('ℹ️ Transaction cần approval từ Safe owners trước khi execute');
+      console.log('ℹ️ Sau khi execute, contract sẽ transfer tiền TỪ contract TỚI Safe address');
+      
+      // Với Safe Wallet, transaction sẽ được propose và cần approval từ owners
+      // Trả về safeTxHash - user có thể track transaction trong Safe Wallet
+      return safeTransaction.safeTxHash;
+    } catch (error: any) {
+      console.error('❌ Error creating Safe transaction proposal:', error);
+      throw new Error(`Failed to create Safe transaction proposal: ${error?.message || error}`);
+    }
+  }
+
+  // Nếu không dùng Safe Wallet, dùng cách thông thường
+  // Lấy contract với signer để gọi function
+  const contractWithSigner = await getContractWithSigner();
+  if (!contractWithSigner) {
+    throw new Error('Cannot get contract with signer. Please connect your wallet.');
+  }
+
+  try {
+    console.log('🔷 Calling contract.manualTransferToSafe() from regular wallet...');
+    console.log(`💰 Amount: ${amountEth} ETH (${amountWei.toString()} wei)`);
+    console.log('📞 Function: manualTransferToSafe(uint256 amount)');
+    console.log('🎯 This will transfer funds FROM contract TO Safe address');
+    
+    // Gọi function từ contract - function này sẽ transfer tiền TỪ contract TỚI Safe
+    const tx = await contractWithSigner.manualTransferToSafe(amountWei);
+    console.log('✅ Transaction sent:', tx.hash);
+    
+    const receipt = await tx.wait();
+    console.log('✅ Transaction confirmed:', receipt.hash);
+    console.log('✅ Funds have been transferred FROM contract TO Safe address');
+    
+    return receipt?.hash ?? tx.hash;
+  } catch (error: any) {
+    console.error('❌ Error sending transaction:', error);
+    throw new Error(`Failed to send transaction: ${error?.message || error}`);
+  }
 }
 
 // Declare ethereum type for window
