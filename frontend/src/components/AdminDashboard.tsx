@@ -288,11 +288,12 @@ export const AdminDashboard: React.FC = () => {
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             Safe address: {SAFE_ADDRESS}
           </Typography>
-          {isConnectedToSafe() && (
-            <Typography variant="body2" color="warning.main" sx={{ mt: 1, fontWeight: 'bold' }}>
-              ⚠️ Using Safe Wallet: Transaction will be proposed and requires approval from Safe owners.
-            </Typography>
-          )}
+          <Typography variant="body2" color="warning.main" sx={{ mt: 1, fontWeight: 'bold' }}>
+            ⚠️ Contract has "onlySafe" modifier - requires Safe Wallet and multisig approval.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Transaction will be proposed to Safe Wallet and needs approval from Safe owners.
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmDialog(false)}>Cancel</Button>
@@ -316,28 +317,14 @@ export const AdminDashboard: React.FC = () => {
         >
           <Box>
             <Typography variant="subtitle2" gutterBottom>
-              {isConnectedToSafe() ? 'Transaction Proposed!' : 'Transfer Successful!'}
+              Transfer Successful!
             </Typography>
             <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
               Amount: {parseFloat(amountEth).toFixed(6)} ETH
             </Typography>
-            {isConnectedToSafe() ? (
-              <>
-                <Typography variant="body2" sx={{ mt: 1 }}>
-                  Transaction has been proposed to Safe Wallet.
-                </Typography>
-                <Typography variant="body2" sx={{ mt: 0.5 }}>
-                  It requires approval from Safe owners before execution.
-                </Typography>
-                <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
-                  Safe TX Hash: {txHash}
-                </Typography>
-              </>
-            ) : (
-              <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
-                TX: {txHash}
-              </Typography>
-            )}
+            <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
+              TX: {txHash}
+            </Typography>
             <Button 
               size="small" 
               color="inherit" 

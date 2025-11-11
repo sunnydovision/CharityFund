@@ -675,6 +675,8 @@ export const isAboveThreshold = async (): Promise<boolean> => {
 
 // NEW: amountEth is a string like "0.005"
 // Function này lấy tiền TỪ contract và gửi TỚI Safe address
+// QUAN TRỌNG: Contract có modifier "onlySafe" nên CHỈ Safe address mới gọi được
+// Phải dùng Safe Wallet để gọi function này, và sẽ cần multisig approval
 export async function manualTransferToSafe(amountEth: string): Promise<string> {
   if (!CONTRACT_ADDRESS) {
     throw new Error('Contract address not set');
@@ -684,76 +686,51 @@ export async function manualTransferToSafe(amountEth: string): Promise<string> {
   const amountWei = ethers.parseEther(amountEth); // throws if invalid
   if (amountWei <= 0n) throw new Error('Amount must be greater than 0');
 
-  // QUAN TRỌNG: Nếu đang dùng Safe Wallet, cần dùng Safe SDK txs API
-  // Vì Safe App Provider không hỗ trợ sendTransaction trực tiếp
-  if (isSafeWallet && safeSdk) {
-    try {
-      console.log('🔷 Using Safe Wallet SDK to create transaction proposal...');
-      console.log('📞 Will call contract.manualTransferToSafe() to transfer funds FROM contract TO Safe');
-      console.log(`💰 Amount: ${amountEth} ETH (${amountWei.toString()} wei)`);
-      
-      // Dùng Safe SDK txs API để tạo transaction proposal
-      // Transaction này sẽ gọi contract.manualTransferToSafe(amountWei) từ Safe address
-      // Function này sẽ transfer tiền TỪ contract TỚI Safe address (đã được set trong contract)
-      
-      // Encode function call data: manualTransferToSafe(uint256 amount)
-      const contractInterface = new ethers.Interface(CHARITY_FUND_ABI);
-      const data = contractInterface.encodeFunctionData('manualTransferToSafe', [amountWei]);
-      
-      console.log('📝 Encoded function data:', data);
-      console.log('🎯 Target contract:', CONTRACT_ADDRESS);
-      
-      // Tạo transaction proposal qua Safe SDK
-      // Transaction này sẽ được gửi từ Safe address và gọi contract.manualTransferToSafe()
-      const safeTransaction = await safeSdk.txs.send({
-        txs: [
-          {
-            to: CONTRACT_ADDRESS, // Gọi function trên contract này
-            value: '0', // Không gửi ETH, chỉ gọi function
-            data: data, // Encoded function call: manualTransferToSafe(amountWei)
-          },
-        ],
-      });
-      
-      console.log('✅ Safe transaction proposed successfully!');
-      console.log('📋 Safe TX Hash:', safeTransaction.safeTxHash);
-      console.log('ℹ️ Transaction cần approval từ Safe owners trước khi execute');
-      console.log('ℹ️ Sau khi execute, contract sẽ transfer tiền TỪ contract TỚI Safe address');
-      
-      // Với Safe Wallet, transaction sẽ được propose và cần approval từ owners
-      // Trả về safeTxHash - user có thể track transaction trong Safe Wallet
-      return safeTransaction.safeTxHash;
-    } catch (error: any) {
-      console.error('❌ Error creating Safe transaction proposal:', error);
-      throw new Error(`Failed to create Safe transaction proposal: ${error?.message || error}`);
-    }
-  }
-
-  // Nếu không dùng Safe Wallet, dùng cách thông thường
-  // Lấy contract với signer để gọi function
-  const contractWithSigner = await getContractWithSigner();
-  if (!contractWithSigner) {
-    throw new Error('Cannot get contract with signer. Please connect your wallet.');
+  // QUAN TRỌNG: Contract có modifier "onlySafe", nên PHẢI dùng Safe Wallet
+  // Không thể dùng MetaMask vì contract sẽ revert với "Only Gnosis Safe"
+  if (!isSafeWallet || !safeSdk) {
+    throw new Error(
+      'This function requires Safe Wallet connection. ' +
+      'Contract has "onlySafe" modifier, so only Safe address can call this function. ' +
+      'Please connect Safe Wallet to proceed.'
+    );
   }
 
   try {
-    console.log('🔷 Calling contract.manualTransferToSafe() from regular wallet...');
+    console.log('🔷 Using Safe Wallet to call contract.manualTransferToSafe()...');
     console.log(`💰 Amount: ${amountEth} ETH (${amountWei.toString()} wei)`);
     console.log('📞 Function: manualTransferToSafe(uint256 amount)');
     console.log('🎯 This will transfer funds FROM contract TO Safe address');
+    console.log('ℹ️ Contract requires Safe address (onlySafe modifier)');
+    console.log('ℹ️ Transaction will be proposed and requires multisig approval');
     
-    // Gọi function từ contract - function này sẽ transfer tiền TỪ contract TỚI Safe
-    const tx = await contractWithSigner.manualTransferToSafe(amountWei);
-    console.log('✅ Transaction sent:', tx.hash);
+    // Encode function call data: manualTransferToSafe(uint256 amount)
+    const contractInterface = new ethers.Interface(CHARITY_FUND_ABI);
+    const data = contractInterface.encodeFunctionData('manualTransferToSafe', [amountWei]);
     
-    const receipt = await tx.wait();
-    console.log('✅ Transaction confirmed:', receipt.hash);
-    console.log('✅ Funds have been transferred FROM contract TO Safe address');
+    // Tạo transaction proposal qua Safe SDK
+    // Contract yêu cầu Safe address, nên phải dùng Safe Wallet
+    const safeTransaction = await safeSdk.txs.send({
+      txs: [
+        {
+          to: CONTRACT_ADDRESS, // Gọi function trên contract này
+          value: '0', // Không gửi ETH, chỉ gọi function
+          data: data, // Encoded function call: manualTransferToSafe(amountWei)
+        },
+      ],
+    });
     
-    return receipt?.hash ?? tx.hash;
+    console.log('✅ Safe transaction proposed successfully!');
+    console.log('📋 Safe TX Hash:', safeTransaction.safeTxHash);
+    console.log('ℹ️ Transaction cần approval từ Safe owners trước khi execute');
+    console.log('ℹ️ Sau khi có đủ approvals, contract sẽ transfer tiền TỪ contract TỚI Safe address');
+    
+    // Với Safe Wallet, transaction sẽ được propose và cần approval từ owners
+    // Trả về safeTxHash - user có thể track transaction trong Safe Wallet
+    return safeTransaction.safeTxHash;
   } catch (error: any) {
-    console.error('❌ Error sending transaction:', error);
-    throw new Error(`Failed to send transaction: ${error?.message || error}`);
+    console.error('❌ Error creating Safe transaction proposal:', error);
+    throw new Error(`Failed to create Safe transaction proposal: ${error?.message || error}`);
   }
 }
 

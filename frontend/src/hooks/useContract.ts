@@ -138,11 +138,31 @@ export const useContract = () => {
         txHash: event.transactionHash,
       }));
 
+      // QUAN TRỌNG: Loại bỏ duplicate transactions dựa trên txHash
+      // Có thể có duplicate nếu cùng 1 transaction emit nhiều events
+      const uniqueTransfers = transfersList.reduce((acc: any[], current: any) => {
+        // Check xem đã có transaction với cùng txHash chưa
+        const existing = acc.find((t) => t.txHash.toLowerCase() === current.txHash.toLowerCase());
+        if (!existing) {
+          // Nếu chưa có, thêm vào
+          acc.push(current);
+        } else {
+          // Nếu đã có, giữ transaction có timestamp mới hơn hoặc amount lớn hơn
+          if (current.timestamp > existing.timestamp || 
+              parseFloat(current.amount) > parseFloat(existing.amount)) {
+            // Thay thế bằng transaction mới hơn
+            const index = acc.indexOf(existing);
+            acc[index] = current;
+          }
+        }
+        return acc;
+      }, []);
+
       // Sort by timestamp descending
-      transfersList.sort((a, b) => b.timestamp - a.timestamp);
+      uniqueTransfers.sort((a, b) => b.timestamp - a.timestamp);
 
       // Don't calculate totalTransferred here - use contract function instead
-      setTransfers(transfersList, true);
+      setTransfers(uniqueTransfers, true);
     } catch (err) {
       console.error('Error loading transfers:', err);
     }
