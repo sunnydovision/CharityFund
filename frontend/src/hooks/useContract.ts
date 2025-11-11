@@ -1,9 +1,8 @@
 import { useCallback, useEffect } from 'react';
 import { useContractStore } from '../store/contractStore';
-import { getContract, getContractBalance, getProvider } from '../services/ethers.service';
+import { getContract, getContractBalance, getEthBalance } from '../services/ethers.service';
 import { CONTRACT_ADDRESS, SAFE_ADDRESS } from '../constants/contractAddress';
 import { ethers } from 'ethers';
-import { fetchContractTransactions } from '../services/etherscan.service';
 
 export const useContract = () => {
   const {
@@ -19,6 +18,8 @@ export const useContract = () => {
     setContractBalance,
     setSafeBalance,
     setThreshold,
+    setTotalReceived,
+    setTotalTransferred,
     setDonations,
     setTransfers,
     setLoading,
@@ -40,21 +41,34 @@ export const useContract = () => {
         throw new Error('Failed to get contract instance');
       }
 
-      // Get contract balance
+      // Get contract balance from contract function
       const balance = await getContractBalance();
       setContractBalance(balance);
 
-      // Get threshold
-      const thresholdValue = await contract.THRESHOLD();
+      // Get threshold (capAmountForAutoTransfering)
+      let thresholdValue: bigint;
+      try {
+        thresholdValue = await (contract as any).capAmountForAutoTransfering();
+      } catch {
+        // Fallback to THRESHOLD if capAmountForAutoTransfering doesn't exist
+        thresholdValue = await contract.THRESHOLD();
+      }
       setThreshold(ethers.formatEther(thresholdValue));
+
+      // Get total received from contract function
+      const totalReceivedValue = await (contract as any).getTotalReceive();
+      const totalReceivedFormatted = ethers.formatEther(totalReceivedValue);
+      setTotalReceived(totalReceivedFormatted);
+
+      // Get total transferred from contract function
+      const totalTransferredValue = await (contract as any).getTotalTransfer();
+      const totalTransferredFormatted = ethers.formatEther(totalTransferredValue);
+      setTotalTransferred(totalTransferredFormatted);
 
       // Get Safe balance
       if (SAFE_ADDRESS) {
-        const provider = getProvider();
-        if (provider) {
-          const safeBalanceValue = await provider.getBalance(SAFE_ADDRESS);
-          setSafeBalance(ethers.formatEther(safeBalanceValue));
-        }
+        const safeBalanceValue = await getEthBalance(SAFE_ADDRESS);
+        setSafeBalance(safeBalanceValue);
       }
 
       setLoading(false);
@@ -63,61 +77,41 @@ export const useContract = () => {
       setError(err.message || 'Failed to load contract data');
       setLoading(false);
     }
-  }, [setContractBalance, setSafeBalance, setThreshold, setLoading, setError]);
+  }, [setContractBalance, setSafeBalance, setThreshold, setTotalReceived, setTotalTransferred, setLoading, setError]);
 
   const loadDonations = useCallback(async () => {
     if (!CONTRACT_ADDRESS) return;
 
     try {
-      const transactions = await fetchContractTransactions(CONTRACT_ADDRESS);
-
-      if (transactions.length > 0) {
-        let runningBalance = 0n;
-        const donationsList = transactions
-          .filter((tx) => tx.to && tx.to.toLowerCase() === CONTRACT_ADDRESS.toLowerCase())
-          .map((tx) => {
-            const value = BigInt(tx.value);
-            runningBalance += value;
-
-            return {
-              donor: tx.from,
-              amount: ethers.formatEther(value),
-              balance: ethers.formatEther(runningBalance),
-              timestamp: tx.timeStamp,
-              txHash: tx.hash,
-            };
-          })
-          .sort((a, b) => b.timestamp - a.timestamp);
-
-        setDonations(donationsList);
-        return;
-      }
-    } catch (err) {
-      console.error('Error fetching transactions from Etherscan:', err);
-    }
-
-    // Fallback to on-chain events if API returns nothing or fails
-    try {
       const contract = getContract();
       if (!contract) return;
 
-      const filter = contract.filters.DonationReceived();
-      const events = await contract.queryFilter(filter, 0n);
+      // Query donationReceived and donationFallback events from genesis block
+      const donationFilter = contract.filters.donationReceived();
+      const fallbackFilter = contract.filters.donationFallback();
+      const donationEvents = await contract.queryFilter(donationFilter, 0n);
+      const fallbackEvents = await contract.queryFilter(fallbackFilter, 0n);
 
-      const donationsList = events
+      // Combine both event types
+      const allEvents = [...donationEvents, ...fallbackEvents];
+
+      const donationsList = allEvents
+        .filter((event: any) => event.args.amount > 0n) // Only include events with value > 0
         .map((event: any) => ({
           donor: event.args.donor,
           amount: ethers.formatEther(event.args.amount),
           balance: ethers.formatEther(event.args.balance),
           timestamp: Number(event.args.timestamp),
           txHash: event.transactionHash,
-        }))
-        .sort((a, b) => b.timestamp - a.timestamp);
+        }));
 
-      setDonations(donationsList);
+      // Sort by timestamp descending
+      donationsList.sort((a, b) => b.timestamp - a.timestamp);
+
+      // Don't calculate totalReceived here - use contract function instead
+      setDonations(donationsList, true);
     } catch (err) {
-      console.error('Error loading donations from contract events:', err);
-      setDonations([]);
+      console.error('Error loading donations:', err);
     }
   }, [setDonations]);
 
@@ -128,13 +122,18 @@ export const useContract = () => {
       const contract = getContract();
       if (!contract) return;
 
-      // Query AutoTransfer events
-      const filter = contract.filters.AutoTransfer();
-      const events = await contract.queryFilter(filter);
+      // Query autoTransfer and manualTransfer events from genesis block
+      const autoTransferFilter = contract.filters.autoTransfer();
+      const manualTransferFilter = contract.filters.manualTransfer();
+      const autoEvents = await contract.queryFilter(autoTransferFilter, 0n);
+      const manualEvents = await contract.queryFilter(manualTransferFilter, 0n);
 
-      const transfersList = events.map((event: any) => ({
+      // Combine both event types
+      const allTransferEvents = [...autoEvents, ...manualEvents];
+
+      const transfersList = allTransferEvents.map((event: any) => ({
         amount: ethers.formatEther(event.args.amount),
-        to: event.args.to,
+        to: event.args.to || event.args.by, // autoTransfer has 'to', manualTransfer has 'by'
         timestamp: Number(event.args.timestamp),
         txHash: event.transactionHash,
       }));
@@ -142,7 +141,8 @@ export const useContract = () => {
       // Sort by timestamp descending
       transfersList.sort((a, b) => b.timestamp - a.timestamp);
 
-      setTransfers(transfersList);
+      // Don't calculate totalTransferred here - use contract function instead
+      setTransfers(transfersList, true);
     } catch (err) {
       console.error('Error loading transfers:', err);
     }
@@ -163,24 +163,26 @@ export const useContract = () => {
     const contract = getContract();
     if (!contract) return;
 
-    const onDonationReceived = (donor: string, amount: bigint, balance: bigint, timestamp: bigint) => {
-      console.log('Donation received:', { donor, amount, balance, timestamp });
+    const onDonationReceived = () => {
       // Refresh data when new donation is received
       refreshData();
     };
 
-    const onAutoTransfer = (amount: bigint, to: string, timestamp: bigint) => {
-      console.log('Auto transfer:', { amount, to, timestamp });
+    const onAutoTransfer = () => {
       // Refresh data when auto transfer occurs
       refreshData();
     };
 
-    contract.on('DonationReceived', onDonationReceived);
-    contract.on('AutoTransfer', onAutoTransfer);
+    contract.on('donationReceived', onDonationReceived);
+    contract.on('donationFallback', onDonationReceived);
+    contract.on('autoTransfer', onAutoTransfer);
+    contract.on('manualTransfer', onAutoTransfer);
 
     return () => {
-      contract.off('DonationReceived', onDonationReceived);
-      contract.off('AutoTransfer', onAutoTransfer);
+      contract.off('donationReceived', onDonationReceived);
+      contract.off('donationFallback', onDonationReceived);
+      contract.off('autoTransfer', onAutoTransfer);
+      contract.off('manualTransfer', onAutoTransfer);
     };
   }, [refreshData]);
 

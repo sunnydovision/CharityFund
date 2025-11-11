@@ -29,8 +29,10 @@ interface ContractState {
   setContractBalance: (balance: string) => void;
   setSafeBalance: (balance: string) => void;
   setThreshold: (threshold: string) => void;
-  setDonations: (donations: Donation[]) => void;
-  setTransfers: (transfers: Transfer[]) => void;
+  setTotalReceived: (total: string) => void;
+  setTotalTransferred: (total: string) => void;
+  setDonations: (donations: Donation[], skipTotalCalc?: boolean) => void;
+  setTransfers: (transfers: Transfer[], skipTotalCalc?: boolean) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
   addDonation: (donation: Donation) => void;
@@ -57,18 +59,36 @@ export const useContractStore = create<ContractState>((set, get) => ({
   setThreshold: (threshold) =>
     set({ threshold }),
 
-  setDonations: (donations) => {
-    const totalReceived = donations
-      .reduce((sum, d) => sum + parseFloat(d.amount), 0)
-      .toFixed(4);
-    set({ donations, totalReceived });
+  setTotalReceived: (total) =>
+    set({ totalReceived: total }),
+
+  setTotalTransferred: (total) =>
+    set({ totalTransferred: total }),
+
+  setDonations: (donations, skipTotalCalc = false) => {
+    // Only calculate from events if skipTotalCalc is false (for backward compatibility)
+    if (!skipTotalCalc) {
+      const totalReceived = donations
+        .reduce((sum, d) => sum + parseFloat(d.amount), 0)
+        .toFixed(4);
+      set({ donations, totalReceived });
+    } else {
+      // Don't override totalReceived - it comes from contract.getTotalReceive()
+      set({ donations });
+    }
   },
 
-  setTransfers: (transfers) => {
-    const totalTransferred = transfers
-      .reduce((sum, t) => sum + parseFloat(t.amount), 0)
-      .toFixed(4);
-    set({ transfers, totalTransferred });
+  setTransfers: (transfers, skipTotalCalc = false) => {
+    // Only calculate from events if skipTotalCalc is false (for backward compatibility)
+    if (!skipTotalCalc) {
+      const totalTransferred = transfers
+        .reduce((sum, t) => sum + parseFloat(t.amount), 0)
+        .toFixed(4);
+      set({ transfers, totalTransferred });
+    } else {
+      // Don't override totalTransferred - it comes from contract.getTotalTransfer()
+      set({ transfers });
+    }
   },
 
   setLoading: (isLoading) =>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { useWalletStore } from '../store/walletStore';
-import { connectWallet, getProvider, switchNetwork } from '../services/ethers.service';
+import { connectWallet, connectSafeWallet, getProvider, switchNetwork } from '../services/ethers.service';
 import { getCurrentNetworkConfig } from '../constants/networkConfig';
 
 export const useWallet = () => {
@@ -36,6 +36,31 @@ export const useWallet = () => {
     } catch (err: any) {
       setError(err.message || 'Failed to connect wallet');
       disconnect();
+    } finally {
+      setConnecting(false);
+    }
+  }, [setWallet, setConnecting, setError, disconnect]);
+
+  const connectSafe = useCallback(async () => {
+    setConnecting(true);
+    setError(null);
+
+    try {
+      const walletInfo = await connectSafeWallet();
+      if (walletInfo) {
+        setWallet(walletInfo.address, walletInfo.balance, walletInfo.chainId);
+        
+        // Check if on correct network
+        const expectedChainId = getCurrentNetworkConfig().chainId;
+        if (walletInfo.chainId !== expectedChainId) {
+          await switchNetwork(expectedChainId);
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to connect Safe wallet');
+      disconnect();
+    } finally {
+      setConnecting(false);
     }
   }, [setWallet, setConnecting, setError, disconnect]);
 
@@ -130,6 +155,7 @@ export const useWallet = () => {
     isConnecting,
     error,
     connect,
+    connectSafe,
     disconnect,
     switchToCorrectNetwork,
     refreshBalance,

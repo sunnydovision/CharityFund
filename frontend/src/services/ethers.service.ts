@@ -1,22 +1,58 @@
 import { ethers, BrowserProvider, Contract, JsonRpcSigner } from 'ethers';
 import { CHARITY_FUND_ABI } from '../constants/contractABI';
 import { CONTRACT_ADDRESS } from '../constants/contractAddress';
-import { getCurrentNetworkConfig } from '../constants/networkConfig';
+import { getCurrentNetworkConfig, getNetworkProvider } from '../constants/networkConfig';
+
+// Fallback RPC URLs (add your own API keys if needed)
+const RPC_URLS = [
+  'https://sepolia.infura.io/v3/f75184c15a1146ea88a13275ad4056b3',
+  'https://rpc.sepolia.org',
+  'https://ethereum-sepolia-rpc.publicnode.com'
+];
+
+// Simple round-robin provider selection
+let currentProviderIndex = 0;
+const getNextRpcUrl = (): string => {
+  const url = RPC_URLS[currentProviderIndex];
+  currentProviderIndex = (currentProviderIndex + 1) % RPC_URLS.length;
+  return url;
+};
+
+// Cache for contract instances
+const contractCache = new Map<string, ethers.Contract>();
+
+// Get provider with fallback
+const getFallbackProvider = (): ethers.JsonRpcProvider => {
+  const rpcUrl = getNextRpcUrl();
+  console.log(`Using RPC URL: ${rpcUrl}`);
+  return new ethers.JsonRpcProvider(rpcUrl);
+};
 
 // Get provider
-export const getProvider = (): BrowserProvider | null => {
+export const getProvider = (): BrowserProvider | ethers.JsonRpcProvider => {
+  // First try browser provider (MetaMask)
   if (typeof window !== 'undefined' && window.ethereum) {
-    return new ethers.BrowserProvider(window.ethereum);
+    try {
+      return new ethers.BrowserProvider(window.ethereum);
+    } catch (error) {
+      console.warn('Failed to create BrowserProvider, falling back to JsonRpcProvider', error);
+    }
   }
-  return null;
+  
+  // Fall back to direct RPC
+  return getFallbackProvider();
 };
 
 // Get signer
 export const getSigner = async (): Promise<JsonRpcSigner | null> => {
-  const provider = getProvider();
-  if (!provider) return null;
-  
   try {
+    const provider = getProvider();
+    // If we're using a JsonRpcProvider (not BrowserProvider), we can't get a signer
+    if (!(provider instanceof ethers.BrowserProvider)) {
+      console.warn('Cannot get signer: Not using a browser provider');
+      return null;
+    }
+    
     const signer = await provider.getSigner();
     return signer;
   } catch (error) {
@@ -25,12 +61,27 @@ export const getSigner = async (): Promise<JsonRpcSigner | null> => {
   }
 };
 
-// Get contract instance (read-only)
+// Get contract instance with caching
 export const getContract = (): Contract | null => {
-  const provider = getProvider();
-  if (!provider || !CONTRACT_ADDRESS) return null;
+  if (!CONTRACT_ADDRESS) return null;
   
-  return new ethers.Contract(CONTRACT_ADDRESS, CHARITY_FUND_ABI, provider);
+  // Check cache first
+  const cachedContract = contractCache.get(CONTRACT_ADDRESS);
+  if (cachedContract) {
+    return cachedContract;
+  }
+  
+  const provider = getProvider();
+  if (!provider) return null;
+  
+  try {
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, CHARITY_FUND_ABI, provider);
+    contractCache.set(CONTRACT_ADDRESS, contract);
+    return contract;
+  } catch (error) {
+    console.error('Error creating contract instance:', error);
+    return null;
+  }
 };
 
 // Get contract instance with signer (for write operations)
@@ -41,7 +92,7 @@ export const getContractWithSigner = async (): Promise<Contract | null> => {
   return new ethers.Contract(CONTRACT_ADDRESS, CHARITY_FUND_ABI, signer);
 };
 
-// Connect wallet
+// Connect wallet (MetaMask)
 export const connectWallet = async (): Promise<{
   address: string;
   balance: string;
@@ -70,6 +121,42 @@ export const connectWallet = async (): Promise<{
     };
   } catch (error) {
     console.error('Error connecting wallet:', error);
+    throw error;
+  }
+};
+
+// Connect Safe wallet
+export const connectSafeWallet = async (): Promise<{
+  address: string;
+  balance: string;
+  chainId: number;
+} | null> => {
+  try {
+    // Check if Safe is available
+    if (!window.ethereum) {
+      throw new Error('No wallet provider found');
+    }
+
+    // Safe wallets typically use the same EIP-1193 interface
+    // For Safe, we check if it's a Safe wallet by looking for specific properties
+    const provider = getProvider();
+    if (!provider) return null;
+
+    // Request account access
+    await provider.send('eth_requestAccounts', []);
+    
+    const signer = await provider.getSigner();
+    const address = await signer.getAddress();
+    const balance = await provider.getBalance(address);
+    const network = await provider.getNetwork();
+
+    return {
+      address,
+      balance: ethers.formatEther(balance),
+      chainId: Number(network.chainId),
+    };
+  } catch (error) {
+    console.error('Error connecting Safe wallet:', error);
     throw error;
   }
 };
@@ -128,16 +215,82 @@ export const donateETH = async (amount: string): Promise<string> => {
   }
 };
 
+// Get contract balance with retry logic
+const withRetry = async <T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  delay = 1000
+): Promise<T> => {
+  let lastError: Error | null = null;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      console.warn(`Attempt ${i + 1} failed:`, error);
+      if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+      }
+    }
+  }
+  
+  throw lastError || new Error('Max retries reached');
+};
+
 // Get contract balance
 export const getContractBalance = async (): Promise<string> => {
-  const contract = getContract();
-  if (!contract) return '0';
+  return withRetry(async () => {
+    const contract = getContract();
+    if (!contract) {
+      console.error('getContractBalance: No contract instance available');
+      return '0';
+    }
 
+    try {
+      console.log('getContractBalance: Getting balance for contract at', contract.target);
+      const balance = await contract.getBalance();
+      console.log('getContractBalance: Raw balance from contract:', balance.toString());
+      const formattedBalance = ethers.formatEther(balance);
+      console.log('getContractBalance: Formatted balance:', formattedBalance, 'ETH');
+      return formattedBalance;
+    } catch (error) {
+      console.error('Error in getContractBalance:', error);
+      
+      // Fallback to direct ETH balance check
+      try {
+        console.log('getContractBalance: Falling back to direct ETH balance check');
+        const provider = getProvider();
+        if (provider && contract.target) {
+          const ethBalance = await provider.getBalance(contract.target.toString());
+          const formattedEthBalance = ethers.formatEther(ethBalance);
+          console.log('getContractBalance: Fallback ETH balance:', formattedEthBalance, 'ETH');
+          return formattedEthBalance;
+        }
+      } catch (fallbackError) {
+        console.error('Fallback balance check failed:', fallbackError);
+      }
+      
+      throw error; // Re-throw to trigger retry
+    }
+  }).catch(() => '0'); // Return '0' if all retries fail
+};
+
+// Direct ETH balance check
+export const getEthBalance = async (address: string): Promise<string> => {
   try {
-    const balance = await contract.getBalance();
-    return ethers.formatEther(balance);
+    const provider = getProvider();
+    if (!provider) {
+      console.error('getEthBalance: No provider available');
+      return '0';
+    }
+    console.log(`getEthBalance: Getting ETH balance for ${address}`);
+    const balance = await provider.getBalance(address);
+    const formattedBalance = ethers.formatEther(balance);
+    console.log(`getEthBalance: Balance for ${address}:`, formattedBalance, 'ETH');
+    return formattedBalance;
   } catch (error) {
-    console.error('Error getting contract balance:', error);
+    console.error('Error in getEthBalance:', error);
     return '0';
   }
 };

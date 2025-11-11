@@ -31,8 +31,8 @@ export const AdminDashboard: React.FC = () => {
   const [safeOwners, setSafeOwners] = useState<string[]>([]);
   const [isCheckingOwner, setIsCheckingOwner] = useState(false);
 
-  // NEW: amount state (ETH string)
   const [amountEth, setAmountEth] = useState<string>('');
+  const [isValidAmount, setIsValidAmount] = useState<boolean>(true);
 
   const { isConnected, address } = useWallet();
   const { contractBalance, threshold, refreshData } = useContract();
@@ -69,23 +69,45 @@ export const AdminDashboard: React.FC = () => {
     checkIfSafeOwner();
   }, [isConnected, address]);
 
+  const validateAmount = (value: string): boolean => {
+    const amount = parseFloat(value);
+    const bal = parseFloat(contractBalance || '0');
+    
+    if (value === '') {
+      return false;
+    }
+    
+    if (isNaN(amount) || amount <= 0) {
+      return false;
+    }
+    
+    if (amount > bal) {
+      return false;
+    }
+    
+    return true;
+  };
+
+  const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    // Allow only numbers and a single decimal point
+    if (/^\d*\.?\d*$/.test(value) || value === '') {
+      setAmountEth(value);
+      setIsValidAmount(validateAmount(value));
+    }
+  };
+
   const handleTransferClick = () => {
     setError(null);
-
+    
+    if (!isValidAmount) {
+      setError('Please enter a valid amount to transfer');
+      return;
+    }
+    
     const bal = parseFloat(contractBalance || '0');
     if (bal === 0) {
       setError('Contract balance is zero');
-      return;
-    }
-
-    // Validate amount
-    const n = parseFloat(amountEth);
-    if (isNaN(n) || n <= 0) {
-      setError('Please enter a positive ETH amount.');
-      return;
-    }
-    if (n > bal) {
-      setError(`Amount exceeds contract balance (${bal.toFixed(6)} ETH).`);
       return;
     }
 
@@ -177,22 +199,29 @@ export const AdminDashboard: React.FC = () => {
               Current Contract Balance
             </Typography>
             <Typography variant="h4" gutterBottom>
-              {parseFloat(contractBalance).toFixed(4)} ETH
+              {contractBalance ? Number(contractBalance).toLocaleString(undefined, {
+                minimumFractionDigits: 4,
+                maximumFractionDigits: 4
+              }) : '0.0000'} ETH
             </Typography>
             <Typography variant="caption" color="text.secondary">
               Available for manual transfer
             </Typography>
           </Box>
 
-          {/* NEW: input amount */}
           <TextField
             label="ETH amount to transfer"
-            placeholder="e.g. 0.005"
+            placeholder={`e.g. 0.005 (Max: ${parseFloat(contractBalance || '0').toFixed(6)} ETH)`}
             fullWidth
             value={amountEth}
-            onChange={(e) => setAmountEth(e.target.value)}
+            onChange={handleAmountChange}
             sx={{ mb: 2 }}
-            inputProps={{ inputMode: 'decimal' }}
+            inputProps={{ 
+              inputMode: 'decimal',
+              pattern: '^\d*\.?\d*$'
+            }}
+            error={!isValidAmount && amountEth !== ''}
+            helperText={!isValidAmount && amountEth !== '' ? 'Please enter a valid amount' : ''}
           />
 
           <Typography variant="body2" color="text.secondary" paragraph>
@@ -205,10 +234,10 @@ export const AdminDashboard: React.FC = () => {
             color="primary"
             fullWidth
             onClick={handleTransferClick}
-            disabled={isTransferring || parseFloat(contractBalance) === 0}
+            disabled={isTransferring || !isValidAmount || amountEth === '' || parseFloat(contractBalance) === 0}
             startIcon={isTransferring ? <CircularProgress size={20} /> : <SendIcon />}
           >
-            {isTransferring ? 'Transferring...' : 'Transfer to Safe'}
+            {isTransferring ? 'Processing Transfer...' : 'Transfer to Safe'}
           </Button>
 
           <Box sx={{ mt: 2, p: 2, bgcolor: 'info.light', borderRadius: 1 }}>
@@ -239,12 +268,35 @@ export const AdminDashboard: React.FC = () => {
 
       <Snackbar
         open={success}
-        autoHideDuration={6000}
+        autoHideDuration={10000}
         onClose={handleCloseSuccess}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
-        <Alert onClose={handleCloseSuccess} severity="success" sx={{ width: '100%' }}>
-          Transfer successful! Transaction: {txHash.substring(0, 10)}...
+        <Alert 
+          onClose={handleCloseSuccess} 
+          severity="success" 
+          sx={{ width: '100%' }}
+          variant="filled"
+        >
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>Transfer Successful!</Typography>
+            <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+              Amount: {parseFloat(amountEth).toFixed(6)} ETH
+            </Typography>
+            <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
+              TX: {txHash}
+            </Typography>
+            <Button 
+              size="small" 
+              color="inherit" 
+              href={`https://etherscan.io/tx/${txHash}`} 
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{ mt: 1, color: 'white', textDecoration: 'underline' }}
+            >
+              View on Etherscan
+            </Button>
+          </Box>
         </Alert>
       </Snackbar>
     </>

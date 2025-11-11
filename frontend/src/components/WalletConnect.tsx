@@ -8,8 +8,10 @@ import {
   Chip,
   Alert,
   CircularProgress,
+  Divider,
 } from '@mui/material';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
+import SecurityIcon from '@mui/icons-material/Security';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useWallet } from '../hooks/useWallet';
@@ -26,6 +28,7 @@ export const WalletConnect: React.FC = () => {
     isConnecting,
     error,
     connect,
+    connectSafe,
     disconnect,
     switchToCorrectNetwork,
     refreshBalance,
@@ -44,6 +47,7 @@ export const WalletConnect: React.FC = () => {
     return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`;
   };
 
+
   if (!isConnected) {
     return (
       <Card sx={{ mb: 3 }}>
@@ -54,22 +58,36 @@ export const WalletConnect: React.FC = () => {
               Connect Your Wallet
             </Typography>
             <Typography variant="body2" color="text.secondary" align="center">
-              Connect your MetaMask wallet to start donating
+              Connect your wallet to start donating
             </Typography>
             {error && (
               <Alert severity="error" sx={{ width: '100%' }}>
                 {error}
               </Alert>
             )}
-            <Button
-              variant="contained"
-              size="large"
-              onClick={connect}
-              disabled={isConnecting}
-              startIcon={isConnecting ? <CircularProgress size={20} /> : <AccountBalanceWalletIcon />}
-            >
-              {isConnecting ? 'Connecting...' : 'Connect Wallet'}
-            </Button>
+            <Box display="flex" flexDirection="column" gap={2} sx={{ width: '100%', maxWidth: 400 }}>
+              <Button
+                variant="contained"
+                size="large"
+                fullWidth
+                onClick={connect}
+                disabled={isConnecting}
+                startIcon={isConnecting ? <CircularProgress size={20} /> : <AccountBalanceWalletIcon />}
+              >
+                {isConnecting ? 'Connecting...' : 'Connect MetaMask'}
+              </Button>
+              <Divider>OR</Divider>
+              <Button
+                variant="outlined"
+                size="large"
+                fullWidth
+                onClick={connectSafe}
+                disabled={isConnecting}
+                startIcon={isConnecting ? <CircularProgress size={20} /> : <SecurityIcon />}
+              >
+                {isConnecting ? 'Connecting...' : 'Connect Safe Wallet'}
+              </Button>
+            </Box>
           </Box>
         </CardContent>
       </Card>
