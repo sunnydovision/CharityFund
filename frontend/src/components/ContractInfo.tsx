@@ -147,9 +147,12 @@ export const ContractInfo: React.FC = () => {
         </Box>
 
         <Box>
-          <Typography variant="body2" color="text.secondary" gutterBottom>
-            Network: <Chip label={networkConfig.name} size="small" />
-          </Typography>
+          <Box display="flex" alignItems="center" gap={1} mb={1}>
+            <Typography variant="body2" color="text.secondary">
+              Network:
+            </Typography>
+            <Chip label={networkConfig.name} size="small" />
+          </Box>
           
           <Box display="flex" alignItems="center" gap={1} mb={1}>
             <Typography variant="body2" color="text.secondary">
