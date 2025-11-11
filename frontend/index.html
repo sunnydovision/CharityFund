@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" href="/favicon.ico" />
+    <link rel="manifest" href="/manifest.json" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
     <!-- Primary Meta Tags -->
@@ -44,6 +45,66 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Initialize Safe SDK EARLY - Safe Wallet checks this when adding app -->
+    <!-- QUAN TRỌNG: Safe Wallet sẽ load app trong iframe và kiểm tra SDK -->
+    <script type="module">
+      // Khởi tạo Safe SDK ngay khi HTML load - TRƯỚC khi React app start
+      // Safe Wallet sẽ kiểm tra app có hỗ trợ Safe App functionality khi add app
+      console.log('🔷 HTML: Starting Safe SDK initialization...');
+      console.log('🔷 HTML: Is in iframe?', window.self !== window.top);
+      console.log('🔷 HTML: User agent:', navigator.userAgent);
+      
+      // QUAN TRỌNG: Khởi tạo SDK ngay cả khi không trong iframe
+      // Safe Wallet sẽ load app trong iframe khi kiểm tra
+      import('@safe-global/safe-apps-sdk').then((module) => {
+        const SafeAppsSDK = module.default || module;
+        try {
+          // Khởi tạo SDK - Safe Wallet sẽ detect communicator
+          const sdk = new SafeAppsSDK();
+          console.log('✅ HTML: Safe Apps SDK initialized!', sdk);
+          console.log('✅ HTML: SDK communicator:', sdk.communicator);
+          console.log('✅ HTML: SDK safe:', sdk.safe);
+          
+          // Store globally để Safe Wallet có thể detect
+          window.__SAFE_APP_SDK__ = sdk;
+          window.safeSDK = sdk;
+          
+          // QUAN TRỌNG: Đảm bảo communicator sẵn sàng và listen messages
+          // Safe Wallet sẽ gửi message và đợi response
+          if (sdk.communicator) {
+            console.log('✅ HTML: SDK communicator is ready');
+            
+            // Listen cho messages từ parent (Safe Wallet)
+            window.addEventListener('message', (event) => {
+              // Log tất cả messages để debug
+              if (event.data && typeof event.data === 'object') {
+                console.log('📨 HTML: Received message:', event.data);
+              }
+            });
+          }
+          
+          // Thử gọi getInfo() ngay để "activate" SDK
+          // Điều này giúp Safe Wallet biết app hỗ trợ Safe App
+          if (sdk.safe && sdk.safe.getInfo) {
+            sdk.safe.getInfo()
+              .then((info) => {
+                console.log('✅ HTML: Safe Wallet detected!', info);
+              })
+              .catch((e) => {
+                // OK - không trong Safe Wallet, nhưng SDK đã sẵn sàng
+                console.log('ℹ️ HTML: Not in Safe Wallet yet (OK when adding app)');
+              });
+          }
+          
+          // SDK đã sẵn sàng - Safe Wallet có thể detect qua communicator
+        } catch (e) {
+          console.error('❌ HTML: Failed to initialize Safe SDK:', e);
+        }
+      }).catch((e) => {
+        console.error('❌ HTML: Failed to import Safe SDK:', e);
+        console.error('❌ HTML: Error details:', e.message, e.stack);
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

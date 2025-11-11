@@ -16,9 +16,11 @@ import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useWallet } from '../hooks/useWallet';
 import { getCurrentNetworkConfig } from '../constants/networkConfig';
+import { isConnectedToSafe } from '../services/ethers.service';
 
 export const WalletConnect: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSafeConnected, setIsSafeConnected] = useState(false);
   
   const {
     address,
@@ -33,6 +35,45 @@ export const WalletConnect: React.FC = () => {
     switchToCorrectNetwork,
     refreshBalance,
   } = useWallet();
+
+  // Check if connected to Safe Wallet
+  React.useEffect(() => {
+    if (isConnected) {
+      setIsSafeConnected(isConnectedToSafe());
+    } else {
+      setIsSafeConnected(false);
+    }
+  }, [isConnected]);
+
+  // Auto-detect and connect if we're in Safe Wallet iframe
+  React.useEffect(() => {
+    const checkSafeWallet = async () => {
+      // Check if we're in an iframe (likely Safe Wallet)
+      if (window.self !== window.top && !isConnected && !isConnecting) {
+        console.log('🔍 Detected Safe Wallet iframe, attempting to connect...');
+        try {
+          // Wait for Safe Wallet to fully initialize
+          // Safe Wallet cần thời gian để load app và sẵn sàng
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          
+          // Try to connect automatically
+          console.log('🔄 Attempting auto-connect to Safe Wallet...');
+          await connectSafe();
+          console.log('✅ Auto-connect successful!');
+        } catch (error: any) {
+          // Log error but don't show to user - they can manually connect
+          console.log('⚠️ Auto-connect to Safe Wallet failed (user can try manually):', error?.message || error);
+          // Don't set error state - let user try manually
+        }
+      }
+    };
+
+    // Check immediately and also after a delay
+    checkSafeWallet();
+    const timeoutId = setTimeout(checkSafeWallet, 2000);
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRefreshBalance = async () => {
     setIsRefreshing(true);
@@ -87,6 +128,28 @@ export const WalletConnect: React.FC = () => {
               >
                 {isConnecting ? 'Connecting...' : 'Connect Safe Wallet'}
               </Button>
+              {window.self !== window.top && (
+              <Alert severity="success" sx={{ mt: 2, mb: 2 }}>
+                <Typography variant="body2">
+                  <strong>✅ Bạn đang trong Safe Wallet!</strong>
+                  <br />
+                  App đang tự động kết nối với Safe Wallet của bạn...
+                  <br />
+                  Nếu không tự động kết nối, vui lòng nhấn "Connect Safe Wallet" bên dưới.
+                </Typography>
+              </Alert>
+            )}
+            <Typography variant="caption" color="text.secondary" align="center" sx={{ mt: 1 }}>
+                <strong>Hướng dẫn kết nối Safe Wallet:</strong>
+                <br />
+                1. Nhấn nút này để mở Safe Wallet
+                <br />
+                2. Trong Safe Wallet, nhấn <strong>"Use the App with your Safe Account"</strong>
+                <br />
+                3. App sẽ tự động kết nối hoặc nhấn "Connect Safe Wallet" lại
+                <br />
+                <em>Safe Wallet cho phép gọi các hàm admin như updateSafe()</em>
+              </Typography>
             </Box>
           </Box>
         </CardContent>
@@ -108,6 +171,14 @@ export const WalletConnect: React.FC = () => {
                 color="primary"
                 size="small"
               />
+              {isSafeConnected && (
+                <Chip
+                  label="Safe Wallet"
+                  color="success"
+                  size="small"
+                  icon={<SecurityIcon />}
+                />
+              )}
               {isWrongNetwork && (
                 <Chip
                   label="Wrong Network"
