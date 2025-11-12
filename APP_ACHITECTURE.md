@@ -23,14 +23,13 @@ Không sử dụng backend — toàn bộ dữ liệu được lấy trực ti�
 |---------------------------------------------------------------|
 |   CharityFund.sol (main logic)                                |
 |   Gnosis Safe (2/3 multisig)                                  |
-|   MockSafe (local test only)                                  |
-|   Sepolia Network / Local Hardhat node                        |
+|   Sepolia Network / Ethereum Mainnet                         |
 +---------------------------------------------------------------+
 |                  Hosting & Infrastructure                     |
 |---------------------------------------------------------------|
 |   Frontend: Firebase Hosting                                  |
-|   Smart Contract: Sepolia / Local Hardhat                     |
-|   RPC Provider: Alchemy / Infura / Localhost                  |
+|   Smart Contract: Sepolia / Ethereum Mainnet                  |
+|   RPC Provider: Alchemy / Infura                              |
 |   Etherscan API (optional for query)                          |
 +---------------------------------------------------------------+
 ```
@@ -59,21 +58,16 @@ Không sử dụng backend — toàn bộ dữ liệu được lấy trực ti�
     * `AutoTransfer(uint256 amount, address to, uint256 time)`
     * `SafeUpdated(address old, address new, uint256 time)`
 
-* **Contract phụ (local test):**
-
-  * `MockSafe`: chỉ để nhận ETH và emit event → giúp test local auto transfer logic.
-
 * **Network:**
 
-  * Local: Hardhat Node (RPC: `http://127.0.0.1:8545`)
   * Testnet: Sepolia (Infura RPC)
   * Mainnet: optional, khi demo xong
 
 * **Triển khai:**
 
   * Sử dụng Hardhat scripts cho compile, deploy, verify.
-  * Môi trường local: deploy `MockSafe`, deploy `CharityFund(mockSafe.address)`.
   * Môi trường testnet: deploy `CharityFund(GNOSIS_SAFE_ADDRESS)`.
+  * Môi trường mainnet: deploy `CharityFund(GNOSIS_SAFE_ADDRESS)`.
 
 ---
 
@@ -143,21 +137,7 @@ Ethers.js listens via queryFilter → Frontend UI updates
 
 ## 4. Quy trình triển khai và môi trường
 
-### 4.1. Local Development
-
-| Layer           | Công cụ                 | Mục tiêu                               |
-| --------------- | ----------------------- | -------------------------------------- |
-| Smart Contract  | Hardhat + MockSafe      | Viết, test logic nhận và tự chuyển quỹ |
-| Blockchain Node | `npx hardhat node`      | RPC local                              |
-| Frontend        | React (Vite dev server) | Kết nối `localhost:8545`               |
-| Wallet          | MetaMask                | Kết nối local RPC                      |
-
-**Cách test:**
-Deploy MockSafe + CharityFund → kết nối MetaMask RPC localhost → gửi ETH → kiểm tra contract tự chuyển MockSafe.
-
----
-
-### 4.2. Testnet (Sepolia)
+### 4.1. Testnet (Sepolia)
 
 | Thành phần     | Mô tả                                                                 |
 | -------------- | --------------------------------------------------------------------- |
@@ -229,9 +209,9 @@ Safe {
 
 | Biến                     | Vai trò                                     |
 | ------------------------ | ------------------------------------------- |
-| `VITE_CONTRACT_ADDRESS`  | Địa chỉ contract trên Sepolia / local       |
-| `VITE_RPC_URL`           | RPC endpoint (Alchemy / Infura / localhost) |
-| `VITE_NETWORK`           | `"local"` hoặc `"sepolia"`                  |
+| `VITE_CONTRACT_ADDRESS`  | Địa chỉ contract trên Sepolia / Mainnet     |
+| `VITE_RPC_URL`           | RPC endpoint (Alchemy / Infura)              |
+| `VITE_NETWORK`           | `"sepolia"` hoặc `"mainnet"`                 |
 | `VITE_SAFE_ADDRESS`      | Địa chỉ Gnosis Safe (hiển thị UI)           |
 | `VITE_ETHERSCAN_API_KEY` | Nếu dùng API để tra lịch sử                 |
 
@@ -242,7 +222,6 @@ Safe {
 * Không lưu private key trên frontend.
 * Frontend chỉ đọc event từ blockchain, không ghi dữ liệu nhạy cảm.
 * Các giao dịch donate, transfer đều require gas và xác nhận qua MetaMask.
-* Khi test local, mock safe address chỉ để kiểm tra logic; không dùng cho demo thật.
 * Không có backend nên mọi dữ liệu "thống kê" phải tính client-side mỗi lần load.
 
 ---
@@ -261,13 +240,13 @@ Safe {
 1. **Generate Smart Contract Code:**
 
    * Input: Mô tả logic từ mục 3.1
-   * Output: File `CharityFund.sol` + `MockSafe.sol`
+   * Output: File `CharityFund.sol`
    * Tool: Solidity template + Hardhat deploy scripts
 
 2. **Generate Hardhat Project:**
 
    * Setup dependencies, tạo `hardhat.config.js`, scripts deploy/test.
-   * Gắn RPC local & Sepolia từ .env.
+   * Gắn RPC Sepolia/Mainnet từ .env.
 
 3. **Generate Frontend React:**
 
@@ -280,9 +259,9 @@ Safe {
    * `firebase.json`, `build` folder deploy
    * Auto deploy script
 
-5. **Run Local Test Flow:**
+5. **Deploy to Testnet:**
 
-   * Deploy local contracts
-   * Chạy React frontend (localhost:5173)
-   * MetaMask RPC local
+   * Deploy contracts to Sepolia
+   * Chạy React frontend
+   * Kết nối MetaMask với Sepolia network
    * Gửi ETH, test auto-transfer

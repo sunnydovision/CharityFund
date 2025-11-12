@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 
 // Network configuration
-export const NETWORK = import.meta.env.VITE_NETWORK || "localhost";
+export const NETWORK = import.meta.env.VITE_NETWORK || "sepolia";
 const DEFAULT_RPC_URLS = {
   sepolia: [
     'https://sepolia.infura.io/v3/f75184c15a1146ea88a13275ad4056b3',
@@ -86,12 +86,12 @@ export const NETWORK_CONFIG: Record<string, NetworkConfig> = {
 };
 
 export const getCurrentNetworkConfig = (): NetworkConfig => {
-  return NETWORK_CONFIG[NETWORK] || NETWORK_CONFIG["localhost"];
+  return NETWORK_CONFIG[NETWORK] || NETWORK_CONFIG["sepolia"];
 };
 
 // Get a provider with automatic failover between RPC endpoints
 export const getNetworkProvider = (network = NETWORK) => {
-  const config = NETWORK_CONFIG[network] || NETWORK_CONFIG["localhost"];
+  const config = NETWORK_CONFIG[network] || NETWORK_CONFIG["sepolia"];
   const rpcUrl = getNextRpcUrl(network);
   return new ethers.JsonRpcProvider(rpcUrl, undefined, { staticNetwork: new ethers.Network(config.name, config.chainId) });
 };

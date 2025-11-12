@@ -37,8 +37,8 @@ Copy `.env.local.example` to `.env.local` and configure:
 ```env
 VITE_CONTRACT_ADDRESS=0x...     # CharityFund contract address
 VITE_SAFE_ADDRESS=0x...         # Gnosis Safe address
-VITE_NETWORK=localhost          # localhost | sepolia | mainnet
-VITE_RPC_URL=http://127.0.0.1:8545
+VITE_NETWORK=sepolia            # sepolia | mainnet
+VITE_RPC_URL=https://rpc.sepolia.org
 ```
 
 ## 🎨 Features

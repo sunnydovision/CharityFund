@@ -8,10 +8,8 @@
     "test": "hardhat test",
     "test:gas": "REPORT_GAS=true hardhat test",
     "coverage": "hardhat coverage",
-    "deploy:sepolia": "hardhat run scripts/deploy-sepolia.js --network sepolia",
     "clean": "hardhat clean",
-    "verify": "hardhat verify --network sepolia",
-    "start:api": "node server.js"
+    "verify": "hardhat verify --network sepolia"
   },
   "keywords": ["solidity", "hardhat", "ethereum", "charity", "smart-contracts"],
   "author": "SOLID FUND Team",
@@ -22,9 +20,5 @@
     "dotenv": "^16.3.1",
     "chai": "^4.3.10",
     "@nomicfoundation/hardhat-chai-matchers": "^2.0.0"
-  },
-  "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.19.2"
   }
 }
