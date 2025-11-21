@@ -21,15 +21,18 @@ export const Home: React.FC = () => {
         </Typography>
       </Box>
 
+      {/* DonateForm được đưa lên đầu và trung tâm */}
+      <Box display="flex" justifyContent="center" mb={4}>
+        <Box maxWidth="600px" width="100%">
+          <DonateForm />
+        </Box>
+      </Box>
+
       <WalletConnect />
 
       <Grid container spacing={3}>
         <Grid item xs={12}>
           <ContractInfo />
-        </Grid>
-
-        <Grid item xs={12} md={5}>
-          <DonateForm />
         </Grid>
 
         <Grid item xs={12} md={7}>

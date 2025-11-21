@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Box,
   Button,
@@ -25,21 +25,20 @@ export const DonateForm: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [txHash, setTxHash] = useState('');
+  const shouldDonateAfterConnect = useRef(false);
+  const pendingAmount = useRef('');
 
-  const { isConnected, chainId } = useWallet();
+  const { isConnected, chainId, connect, isConnecting } = useWallet();
   const { refreshData } = useContract();
 
   const expectedChainId = getCurrentNetworkConfig().chainId;
   const isWrongNetwork = isConnected && chainId !== expectedChainId;
 
-  const handleDonate = async () => {
-    if (!amount || parseFloat(amount) <= 0) {
+  const executeDonation = useCallback(async (donationAmount?: string) => {
+    const amountToUse = donationAmount || amount;
+    
+    if (!amountToUse || parseFloat(amountToUse) <= 0) {
       setError('Please enter a valid amount');
-      return;
-    }
-
-    if (!isConnected) {
-      setError('Please connect your wallet first');
       return;
     }
 
@@ -52,7 +51,7 @@ export const DonateForm: React.FC = () => {
     setError(null);
 
     try {
-      const hash = await donateETH(amount);
+      const hash = await donateETH(amountToUse);
       setTxHash(hash);
       setSuccess(true);
       setAmount('');
@@ -67,6 +66,46 @@ export const DonateForm: React.FC = () => {
     } finally {
       setIsDonating(false);
     }
+  }, [amount, isWrongNetwork, refreshData]);
+
+  // Tự động donate sau khi connect thành công
+  useEffect(() => {
+    if (isConnected && shouldDonateAfterConnect.current && pendingAmount.current) {
+      shouldDonateAfterConnect.current = false;
+      const amountToDonate = pendingAmount.current;
+      pendingAmount.current = '';
+      executeDonation(amountToDonate);
+    }
+  }, [isConnected, executeDonation]);
+
+  const handleDonate = async () => {
+    if (!amount || parseFloat(amount) <= 0) {
+      setError('Please enter a valid amount');
+      return;
+    }
+
+    // Tự động kết nối ví nếu chưa kết nối
+    if (!isConnected) {
+      setError(null);
+      try {
+        // Lưu amount và flag để donate sau khi connect
+        pendingAmount.current = amount;
+        shouldDonateAfterConnect.current = true;
+        
+        // Kết nối ví
+        await connect();
+        // Donate sẽ được thực hiện tự động trong useEffect khi isConnected = true
+        return;
+      } catch (err: any) {
+        shouldDonateAfterConnect.current = false;
+        pendingAmount.current = '';
+        setError(err.message || 'Failed to connect wallet. Please try again.');
+        return;
+      }
+    }
+
+    // Nếu đã connect, thực hiện donate ngay
+    await executeDonation();
   };
 
   const handleSuggestedAmount = (suggestedAmount: string) => {
@@ -79,11 +118,20 @@ export const DonateForm: React.FC = () => {
 
   return (
     <>
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box display="flex" alignItems="center" gap={1} mb={2}>
-            <VolunteerActivismIcon color="primary" />
-            <Typography variant="h6">Make a Donation</Typography>
+      <Card 
+        sx={{ 
+          mb: 3,
+          boxShadow: 4,
+          border: '2px solid',
+          borderColor: 'primary.main',
+        }}
+      >
+        <CardContent sx={{ p: 4 }}>
+          <Box display="flex" alignItems="center" justifyContent="center" gap={1} mb={3}>
+            <VolunteerActivismIcon color="primary" sx={{ fontSize: 40 }} />
+            <Typography variant="h4" fontWeight="bold" color="primary">
+              Make a Donation
+            </Typography>
           </Box>
 
           <Typography variant="body2" color="text.secondary" paragraph>
@@ -102,12 +150,12 @@ export const DonateForm: React.FC = () => {
             type="number"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            disabled={isDonating || !isConnected || isWrongNetwork}
+            disabled={isDonating || isConnecting || isWrongNetwork}
             InputProps={{
               endAdornment: <InputAdornment position="end">ETH</InputAdornment>,
             }}
             sx={{ mb: 2 }}
-            helperText={!isConnected ? 'Connect wallet to donate' : ''}
+            helperText={!isConnected && !isConnecting ? 'Wallet will be connected automatically when you click donate' : ''}
           />
 
           <Box display="flex" gap={1} flexWrap="wrap" mb={2}>
@@ -120,7 +168,7 @@ export const DonateForm: React.FC = () => {
                 variant="outlined"
                 size="small"
                 onClick={() => handleSuggestedAmount(suggestedAmount)}
-                disabled={isDonating || !isConnected || isWrongNetwork}
+                disabled={isDonating || isConnecting || isWrongNetwork}
               >
                 {suggestedAmount} ETH
               </Button>
@@ -132,15 +180,32 @@ export const DonateForm: React.FC = () => {
             size="large"
             fullWidth
             onClick={handleDonate}
-            disabled={!isConnected || isWrongNetwork || isDonating || !amount}
-            startIcon={isDonating ? <CircularProgress size={20} /> : <VolunteerActivismIcon />}
+            disabled={isWrongNetwork || isDonating || isConnecting || !amount}
+            startIcon={
+              isDonating || isConnecting ? (
+                <CircularProgress size={20} color="inherit" />
+              ) : (
+                <VolunteerActivismIcon />
+              )
+            }
+            sx={{
+              py: 1.5,
+              fontSize: '1.1rem',
+              fontWeight: 'bold',
+            }}
           >
-            {isDonating ? 'Processing...' : 'Donate Now'}
+            {isConnecting
+              ? 'Connecting Wallet...'
+              : isDonating
+              ? 'Processing...'
+              : !isConnected
+              ? 'Connect Wallet & Donate'
+              : 'Donate Now'}
           </Button>
 
-          {!isConnected && (
+          {!isConnected && !isConnecting && (
             <Alert severity="info" sx={{ mt: 2 }}>
-              Please connect your wallet to make a donation
+              Click "Connect Wallet & Donate" to automatically connect your MetaMask wallet
             </Alert>
           )}
         </CardContent>
