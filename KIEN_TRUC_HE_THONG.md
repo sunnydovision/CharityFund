@@ -6,11 +6,49 @@ Tài liệu này giải thích chi tiết về kiến trúc hệ thống, cách 
 
 **Đối tượng đọc:** Người mới bắt đầu với Ethereum blockchain và web3 development.
 
+
+**Smart Contract: RequireSignerAForTransferGuard.sol**
+
+**Quyết định thiết kế then chốt:**
+
+- **EstimateGas Detection**: Detect và cho phép estimateGas ngay từ đầu để không block quá trình estimate gas, tránh brick Safe.
+- **Whitelist Safe Management Functions**: Cho phép các hàm quản lý Safe (setGuard, changeThreshold, etc.) đi qua mà không cần kiểm tra chữ ký để đảm bảo Safe có thể quản lý chính nó.
+- **Module Transaction Support**: Cho phép transaction từ Module đã được enable (execTransactionFromModule) để hỗ trợ các module hợp pháp hoạt động.
+- **Selective Signature Check**: Chỉ kiểm tra chữ ký cho transfer operations (ETH hoặc ERC20), các transaction khác không cần chữ ký của requiredSigner.
+- **Required Signer Enforcement**: Bắt buộc phải có chữ ký của requiredSigner (Signer A) cho mọi transfer operation, ngay cả khi đã có đủ multisig threshold.
+- **Fail-Safe Design**: Nếu không parse được chữ ký hoặc detect estimateGas, cho phép transaction để tránh brick Safe (fail-safe).
+
+**Bảo mật:**
+
+- **EstimateGas Protection**: Kiểm tra `gasPrice == 0 && safeTxGas == 0 && baseGas == 0` để detect estimateGas và cho phép ngay, tránh revert trong quá trình estimate.
+- **Signature Validation**: Parse và validate signatures đúng cách:
+  - Kiểm tra `signatures.length % 65 == 0` để đảm bảo format hợp lệ
+  - Validate `v` phải là 27 hoặc 28
+  - Sử dụng `ecrecover` để verify signer address
+- **Transfer Detection**: Phát hiện transfer operations chính xác:
+  - ETH transfer: `value > 0`
+  - ERC20 transfer: Function selector `0xa9059cbb` (transfer)
+  - ERC20 transferFrom: Function selector `0x23b872dd` (transferFrom)
+- **Module Verification**: Kiểm tra `isModuleEnabled(msgSender)` để xác nhận transaction đến từ Module hợp pháp.
+- **Function Selector Validation**: Kiểm tra function selector từ `bytes memory` bằng assembly để tránh lỗi parse.
+- **Nonce & Hash Validation**: Validate nonce và transaction hash từ Safe trước khi verify signatures.
+- **Signature Limit**: Giới hạn tối đa 8 signatures (520 bytes) để tránh Out-of-Gas (OOG) attacks.
+- **Immutable State**: `safe` và `requiredSigner` được set trong constructor và không thể thay đổi, đảm bảo Guard không bị thay đổi sau khi deploy.
+- **Interface Compliance**: Implement `ISafeGuard` interface và `supportsInterface` để tương thích với Safe 1.4.1+.
+- **Error Handling**: Sử dụng try-catch để xử lý lỗi khi gọi external functions (isModuleEnabled, nonce, getTransactionHash) và fallback về fail-safe.
+
 ---
 
 ## 📋 Mục Lục
 
 1. [Tổng Quan Kiến Trúc](#1-tổng-quan-kiến-trúc)
+   - [1.1. Kiến Trúc 3 Tầng](#11-kiến-trúc-3-tầng)
+   - [1.1.1. Mô Tả Chi Tiết Kiến Trúc 3 Tầng](#111-mô-tả-chi-tiết-kiến-trúc-3-tầng)
+   - [1.1.2. Pipeline Chi Tiết Cho Các Loại Operations](#112-pipeline-chi-tiết-cho-các-loại-operations)
+   - [1.1.3. Luồng Dữ Liệu Giữa Các Tầng](#113-luồng-dữ-liệu-giữa-các-tầng)
+   - [1.1.4. Các Điểm Quan Trọng Trong Pipeline](#114-các-điểm-quan-trọng-trong-pipeline)
+   - [1.1.5. Tóm Tắt Pipeline Chính](#115-tóm-tắt-pipeline-chính)
+   - [1.2. Luồng Dữ Liệu Tổng Quan](#12-luồng-dữ-liệu-tổng-quan)
 2. [Cách Client Tương Tác Với Smart Contract](#2-cách-client-tương-tác-với-smart-contract)
 3. [Kết Nối Ví (Wallet Connection)](#3-kết-nối-ví-wallet-connection)
 4. [Luồng Đọc Thông Tin Public Từ Smart Contract](#4-luồng-đọc-thông-tin-public-từ-smart-contract)
@@ -66,6 +104,888 @@ Tài liệu này giải thích chi tiết về kiến trúc hệ thống, cách 
 │  - Block Explorer: Etherscan                            │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### 1.1.1. Mô Tả Chi Tiết Kiến Trúc 3 Tầng
+
+Kiến trúc hệ thống được chia thành **3 tầng chính**, mỗi tầng có vai trò và trách nhiệm riêng biệt, tạo nên một pipeline hoàn chỉnh từ giao diện người dùng đến blockchain.
+
+#### **Tầng 1: Frontend Layer (Presentation Layer)**
+
+**Vai trò:** Tầng này chịu trách nhiệm hiển thị giao diện người dùng và xử lý các tương tác của người dùng.
+
+**Cấu trúc:**
+
+1. **UI Components Layer (Lớp Component)**
+   - **Vị trí:** `frontend/src/components/`
+   - **Chức năng:** 
+     - Hiển thị UI cho người dùng
+     - Xử lý các sự kiện từ người dùng (click, input, submit)
+     - Render dữ liệu từ state management
+   - **Các component chính:**
+     - `WalletConnect.tsx`: Component kết nối ví MetaMask/Safe
+     - `DonateForm.tsx`: Form để người dùng nhập số tiền và gửi donation
+     - `ContractInfo.tsx`: Hiển thị thông tin contract (balance, threshold, totals)
+     - `DonationHistory.tsx`: Hiển thị lịch sử các donations
+     - `AdminDashboard.tsx`: Dashboard cho admin quản lý
+
+2. **Hooks & State Management Layer (Lớp Logic & Quản Lý State)**
+   - **Vị trí:** `frontend/src/hooks/` và `frontend/src/store/`
+   - **Chức năng:**
+     - Chứa business logic của ứng dụng
+     - Quản lý state toàn cục (Zustand stores)
+     - Cung cấp custom hooks để components sử dụng
+     - Xử lý side effects (useEffect) như load data, listen events
+   - **Các hooks chính:**
+     - `useWallet.ts`: Hook quản lý kết nối ví, lắng nghe thay đổi account/network
+     - `useContract.ts`: Hook tương tác với contract, load data, listen events
+   - **State stores:**
+     - `walletStore.ts`: Lưu trữ state của ví (address, balance, chainId, isConnected)
+     - `contractStore.ts`: Lưu trữ state của contract (balance, donations, transfers, totals)
+
+3. **Services Layer (Lớp Dịch Vụ)**
+   - **Vị trí:** `frontend/src/services/`
+   - **Chức năng:**
+     - Wrapper cho các thư viện blockchain (Ethers.js)
+     - Tạo và quản lý provider, signer, contract instances
+     - Xử lý kết nối ví (MetaMask/Safe)
+     - Cung cấp các hàm tiện ích để tương tác với blockchain
+   - **File chính:**
+     - `ethers.service.ts`: Chứa tất cả logic tương tác với blockchain
+
+**Pipeline trong Tầng Frontend:**
+
+```
+User Interaction (Click/Input)
+    ↓
+UI Component (handleClick, handleSubmit)
+    ↓
+Custom Hook (useWallet, useContract)
+    ↓
+Service Layer (ethers.service.ts)
+    ↓
+Ethers.js Library
+    ↓
+Provider/Signer
+```
+
+**Ví dụ cụ thể:**
+
+Khi user click nút "Connect Wallet" trong `WalletConnect.tsx`:
+1. Component gọi `handleConnect()` 
+2. `handleConnect()` gọi `useWallet().connect()`
+3. Hook `useWallet` gọi `connectWallet()` từ `ethers.service.ts`
+4. Service tạo `BrowserProvider` từ `window.ethereum`
+5. Service gọi `provider.send('eth_requestAccounts', [])` để yêu cầu kết nối
+6. MetaMask popup hiện ra, user approve
+7. Service lấy address, balance, chainId
+8. Hook lưu vào `walletStore` qua `setWallet()`
+9. Component đọc từ store và hiển thị thông tin ví
+
+#### **Tầng 2: Blockchain Layer (Smart Contract & Wallet)**
+
+**Vai trò:** Tầng này chứa logic nghiệp vụ được triển khai trên blockchain và các ví để quản lý tài sản.
+
+**Cấu trúc:**
+
+1. **Smart Contract: CharityFund.sol**
+   - **Vị trí:** `blockchain/CharityFundContract.sol`
+   - **Chức năng:**
+     - Nhận ETH donations từ người dùng
+     - Tự động chuyển tiền đến Safe Wallet khi đạt threshold
+     - Lưu trữ state: balance, totalReceived, totalTransferred, threshold
+     - Emit events: `donationReceived`, `autoTransfer`, `manualTransfer`
+   - **Các hàm chính:**
+     - `receive()`: Hàm fallback để nhận ETH
+     - `getBalance()`: View function trả về balance hiện tại
+     - `getTotalReceive()`: View function trả về tổng số tiền đã nhận
+     - `manualTransferToSafe()`: Hàm để admin chuyển tiền thủ công (chỉ Safe address mới gọi được)
+
+2. **Gnosis Safe Wallet (Multisig Wallet)**
+   - **Chức năng:**
+     - Nhận tiền từ contract khi đạt threshold hoặc khi admin chuyển thủ công
+     - Quản lý bởi multisig (2/3 owners phải approve)
+     - Đảm bảo an toàn cho quỹ từ thiện
+   - **Đặc điểm:**
+     - Chỉ Safe address mới có thể gọi một số hàm của contract (modifier `onlySafe`)
+     - Transactions cần approval từ nhiều owners trước khi execute
+
+**Pipeline trong Tầng Blockchain:**
+
+```
+Transaction Request từ Frontend
+    ↓
+Provider/Signer ký transaction
+    ↓
+Transaction được broadcast lên network
+    ↓
+Miners validate và mine transaction vào block
+    ↓
+Smart Contract execute function
+    ↓
+State được update trên blockchain
+    ↓
+Events được emit
+    ↓
+Frontend listen và update UI
+```
+
+**Ví dụ cụ thể:**
+
+Khi user donate 0.1 ETH:
+1. Frontend gọi `donateETH("0.1")` từ service
+2. Service tạo transaction: `{ to: CONTRACT_ADDRESS, value: 0.1 ETH }`
+3. MetaMask/Safe Wallet ký transaction
+4. Transaction được broadcast lên Sepolia network
+5. Miners validate và mine vào block
+6. Contract `receive()` function được gọi tự động
+7. Contract update state: `balance += 0.1 ETH`, `totalReceived += 0.1 ETH`
+8. Contract emit event `donationReceived(donor, amount, balance, timestamp)`
+9. Frontend listen event và refresh UI
+
+#### **Tầng 3: Infrastructure Layer (RPC Providers & Network)**
+
+**Vai trò:** Tầng này cung cấp kết nối giữa frontend và blockchain network.
+
+**Cấu trúc:**
+
+1. **RPC Providers**
+   - **Chức năng:**
+     - Cung cấp endpoint để frontend giao tiếp với blockchain
+     - Xử lý các RPC calls (eth_call, eth_sendTransaction, eth_getBalance, etc.)
+     - Cache và optimize requests
+   - **Các loại providers:**
+     - **BrowserProvider (MetaMask)**: Provider từ `window.ethereum` khi dùng MetaMask
+     - **SafeAppProvider**: Provider từ Safe Apps SDK khi dùng Safe Wallet
+     - **JsonRpcProvider**: Public RPC provider (Infura, Alchemy, public RPC) làm fallback
+   - **RPC URLs được sử dụng:**
+     - `https://sepolia.infura.io/v3/...` (Infura)
+     - `https://rpc.sepolia.org` (Public RPC)
+     - `https://ethereum-sepolia-rpc.publicnode.com` (PublicNode)
+
+2. **Ethereum Network (Sepolia Testnet)**
+   - **Chức năng:**
+     - Network nơi smart contract được deploy
+     - Xử lý và validate transactions
+     - Lưu trữ state của smart contracts
+   - **Đặc điểm:**
+     - Testnet: ETH miễn phí để test
+     - Block time: ~12 giây
+     - Có block explorer: Etherscan Sepolia
+
+3. **Block Explorer (Etherscan)**
+   - **Chức năng:**
+     - Hiển thị thông tin transactions, blocks, contracts
+     - Verify và publish source code của smart contracts
+     - Theo dõi events và logs
+
+**Pipeline trong Tầng Infrastructure:**
+
+```
+Frontend Request (RPC Call)
+    ↓
+Provider encode request
+    ↓
+HTTP/WebSocket Request đến RPC Endpoint
+    ↓
+RPC Provider xử lý request
+    ↓
+Gửi đến Ethereum Node
+    ↓
+Node execute và trả về response
+    ↓
+Provider decode response
+    ↓
+Frontend nhận kết quả
+```
+
+**Ví dụ cụ thể:**
+
+Khi frontend đọc balance của contract:
+1. Frontend gọi `contract.getBalance()`
+2. Ethers.js encode function call thành RPC call: `eth_call`
+3. Provider gửi HTTP POST request đến RPC endpoint:
+   ```
+   POST https://sepolia.infura.io/v3/...
+   {
+     "jsonrpc": "2.0",
+     "method": "eth_call",
+     "params": [{
+       "to": "0x...",
+       "data": "0x1203db2f..."
+     }, "latest"],
+     "id": 1
+   }
+   ```
+4. RPC provider forward request đến Ethereum node
+5. Node execute `getBalance()` trên contract (view function, không tốn gas)
+6. Node trả về balance (BigInt wei)
+7. Provider decode response và trả về cho Ethers.js
+8. Ethers.js convert BigInt sang string và trả về cho frontend
+9. Frontend format và hiển thị: "5.1234 ETH"
+
+### 1.1.2. Pipeline Chi Tiết Cho Các Loại Operations
+
+#### **Pipeline 1: Read Operations (Đọc Dữ Liệu)**
+
+**Đặc điểm:**
+- Không cần ví kết nối
+- Không tốn gas fee
+- Sử dụng `eth_call` RPC method
+- Response ngay lập tức
+
+**Pipeline chi tiết:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Bước 1: Component Mount                                  │
+│ - ContractInfo.tsx render                                │
+│ - Gọi useContract() hook                                 │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 2: Hook Initialize                                 │
+│ - useContract.ts: useEffect(() => loadAllData())        │
+│ - Gọi loadContractData()                                │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 3: Service Layer - Tạo Contract Instance           │
+│ - ethers.service.ts: getContract()                       │
+│   → getProvider() → BrowserProvider/JsonRpcProvider      │
+│   → new ethers.Contract(ADDRESS, ABI, provider)         │
+│   → Cache contract instance                             │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 4: Gọi View Function                               │
+│ - contract.getBalance()                                  │
+│ - Ethers.js encode function call                        │
+│   → Function selector: 0x1203db2f...                    │
+│   → Encode thành data: "0x1203db2f..."                  │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 5: RPC Call                                        │
+│ - Provider.send("eth_call", [{                         │
+│     to: CONTRACT_ADDRESS,                               │
+│     data: "0x1203db2f..."                               │
+│   }, "latest"])                                         │
+│ - HTTP POST đến RPC endpoint                            │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 6: Blockchain Execute                             │
+│ - Ethereum Node nhận RPC call                           │
+│ - Execute getBalance() trên contract                    │
+│ - Trả về balance (BigInt wei): "5000000000000000000"   │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 7: Decode Response                                │
+│ - Provider nhận response                                │
+│ - Ethers.js decode kết quả                              │
+│ - Convert BigInt: 5000000000000000000n                 │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 8: Format & Store                                 │
+│ - ethers.formatEther(balance) → "5.0"                  │
+│ - Hook lưu vào contractStore                           │
+│   → setContractBalance("5.0")                          │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 9: UI Update                                       │
+│ - Component đọc từ store                                │
+│ - React re-render với data mới                          │
+│ - Hiển thị: "Balance: 5.0 ETH"                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Thời gian thực thi:** ~100-500ms (tùy vào RPC provider và network latency)
+
+#### **Pipeline 2: Write Operations (Ghi Dữ Liệu)**
+
+**Đặc điểm:**
+- Cần ví kết nối (phải có signer)
+- Tốn gas fee
+- Cần user approve transaction
+- Sử dụng `eth_sendTransaction` RPC method
+- Phải đợi transaction được mine vào block
+
+**Pipeline chi tiết:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Bước 1: User Action                                     │
+│ - User nhập amount: "0.1"                               │
+│ - Click nút "Donate"                                    │
+│ - DonateForm.tsx: handleDonate()                        │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 2: Validation                                     │
+│ - Hook validate amount > 0                              │
+│ - Check ví đã kết nối chưa                              │
+│ - Check đủ balance không                                │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 3: Service Layer - Tạo Transaction                │
+│ - ethers.service.ts: donateETH("0.1")                  │
+│   → getSigner() → Lấy signer từ provider                │
+│   → signer.sendTransaction({                           │
+│       to: CONTRACT_ADDRESS,                             │
+│       value: ethers.parseEther("0.1")                  │
+│     })                                                  │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 4: Wallet Popup (MetaMask/Safe)                   │
+│ - MetaMask popup hiện ra                                │
+│ - Hiển thị: "Send 0.1 ETH to 0x..."                    │
+│ - User review và approve                                │
+│ - Wallet ký transaction với private key                 │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 5: Transaction Signed                             │
+│ - Transaction object: {                                 │
+│     to: "0x...",                                        │
+│     value: "100000000000000000",                        │
+│     gasPrice: "20000000000",                           │
+│     gasLimit: "21000",                                  │
+│     nonce: 42,                                          │
+│     signature: { r, s, v }                              │
+│   }                                                     │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 6: Broadcast Transaction                         │
+│ - Provider.send("eth_sendRawTransaction", [tx])        │
+│ - Transaction được broadcast lên network                │
+│ - Trả về transaction hash: "0xabc123..."               │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 7: Transaction Pending                            │
+│ - Transaction vào mempool                               │
+│ - Miners chọn transaction để mine                       │
+│ - Frontend hiển thị: "Transaction pending..."          │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 8: Transaction Mined                              │
+│ - Miner validate transaction                            │
+│ - Execute transaction trong block                        │
+│ - Contract receive() function được gọi                  │
+│ - Contract update state: balance += 0.1 ETH            │
+│ - Contract emit event: donationReceived(...)            │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 9: Wait for Confirmation                          │
+│ - tx.wait() đợi transaction được confirm               │
+│ - Đợi 1-2 block confirmations                           │
+│ - Trả về transaction receipt                           │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 10: Event Detection                               │
+│ - Frontend listen event donationReceived                │
+│ - Event listener được trigger                           │
+│ - Hook gọi refreshData()                                │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 11: UI Update                                     │
+│ - Hook load lại contract data                           │
+│ - Store được update với data mới                        │
+│ - Component re-render                                   │
+│ - Hiển thị: "Donation successful! New balance: 5.1 ETH"│
+└─────────────────────────────────────────────────────────┘
+```
+
+**Thời gian thực thi:** ~15-60 giây (tùy vào network congestion và gas price)
+
+#### **Pipeline 3: Event Listening (Lắng Nghe Events)**
+
+**Đặc điểm:**
+- Real-time updates
+- Không tốn gas (chỉ đọc logs)
+- Sử dụng `eth_getLogs` RPC method
+- Có thể query historical events hoặc listen real-time
+
+**Pipeline chi tiết:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Bước 1: Hook Setup Event Listener                      │
+│ - useContract.ts: useEffect(() => {                    │
+│     const contract = getContract();                     │
+│     contract.on('donationReceived', onDonationReceived) │
+│   })                                                    │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 2: Ethers.js Register Listener                    │
+│ - Contract instance đăng ký event listener              │
+│ - Tạo filter cho event:                                │
+│   contract.filters.donationReceived()                   │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 3: Polling Mechanism                              │
+│ - Ethers.js tự động poll blockchain                     │
+│ - Mỗi 4 giây gọi eth_getLogs                           │
+│ - Query logs từ block mới nhất                          │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 4: New Event Detected                             │
+│ - Blockchain có transaction mới                        │
+│ - Contract emit event donationReceived                  │
+│ - Event được lưu trong transaction logs                 │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 5: RPC Call Get Logs                              │
+│ - Provider.send("eth_getLogs", [{                     │
+│     address: CONTRACT_ADDRESS,                          │
+│     topics: ["0x..."] // Event signature                │
+│     fromBlock: "latest"                                │
+│   }])                                                   │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 6: Blockchain Return Logs                         │
+│ - Node trả về event logs                               │
+│ - Logs chứa: donor, amount, balance, timestamp         │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 7: Decode Event                                   │
+│ - Ethers.js decode event logs                           │
+│ - Parse event args: {                                   │
+│     donor: "0x...",                                     │
+│     amount: 100000000000000000n,                       │
+│     balance: 5000000000000000000n,                      │
+│     timestamp: 1704067200n                              │
+│   }                                                     │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 8: Callback Triggered                             │
+│ - onDonationReceived() callback được gọi                │
+│ - Hook gọi refreshData()                                │
+│ - Load lại contract data và donations                   │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 9: UI Update                                      │
+│ - Store được update với donation mới                    │
+│ - Component re-render                                   │
+│ - Hiển thị donation mới trong DonationHistory           │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Thời gian phát hiện:** ~4-12 giây (tùy vào polling interval và block time)
+
+#### **Pipeline 4: Query Historical Events (Truy Vấn Events Lịch Sử)**
+
+**Đặc điểm:**
+- Query tất cả events từ một block cụ thể đến hiện tại
+- Sử dụng `eth_getLogs` với `fromBlock` và `toBlock`
+- Không tốn gas (chỉ đọc logs)
+
+**Pipeline chi tiết:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Bước 1: User Action                                     │
+│ - User vào trang "Donation History"                     │
+│ - Component mount và gọi loadDonations()                │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 2: Hook Load Historical Events                    │
+│ - useContract.ts: loadDonations()                       │
+│   → getContract()                                       │
+│   → contract.filters.donationReceived()                 │
+│   → contract.queryFilter(filter, 0n) // từ block 0      │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 3: RPC Call Get Logs                              │
+│ - Provider.send("eth_getLogs", [{                      │
+│     address: CONTRACT_ADDRESS,                          │
+│     topics: ["0x...", null, null, null],                │
+│     fromBlock: "0x0",                                   │
+│     toBlock: "latest"                                   │
+│   }])                                                   │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 4: Blockchain Return All Logs                      │
+│ - Node query tất cả logs từ block 0 đến latest          │
+│ - Trả về array of logs: [log1, log2, ..., logN]        │
+│ - Mỗi log chứa: transactionHash, blockNumber, data     │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 5: Decode & Parse Events                           │
+│ - Ethers.js decode từng log                             │
+│ - Parse thành event objects:                            │
+│   [{ donor, amount, balance, timestamp, txHash }, ...]  │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 6: Process & Format Data                          │
+│ - Filter events có amount > 0                           │
+│ - Format amount: ethers.formatEther(amount)             │
+│ - Sort theo timestamp (mới nhất trước)                  │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 7: Store Data                                      │
+│ - Hook lưu vào contractStore                            │
+│   → setDonations(donationsList, true)                   │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Bước 8: UI Display                                      │
+│ - Component đọc từ store                                 │
+│ - Render danh sách donations                            │
+│ - Hiển thị: Donor, Amount, Time, Transaction Hash      │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Thời gian thực thi:** ~1-5 giây (tùy vào số lượng events và RPC provider)
+
+#### **Bảng So Sánh Các Pipeline**
+
+| Đặc điểm | Read Operations | Write Operations | Event Listening | Query Historical Events |
+|----------|----------------|------------------|-----------------|------------------------|
+| **Cần ví kết nối** | ❌ Không | ✅ Có | ❌ Không | ❌ Không |
+| **Tốn gas** | ❌ Không | ✅ Có | ❌ Không | ❌ Không |
+| **RPC Method** | `eth_call` | `eth_sendTransaction` | `eth_getLogs` (polling) | `eth_getLogs` (query) |
+| **Thời gian** | ~100-500ms | ~15-60s | ~4-12s (detection) | ~1-5s |
+| **User approval** | ❌ Không | ✅ Có (MetaMask/Safe) | ❌ Không | ❌ Không |
+| **Real-time** | ❌ Không | ❌ Không | ✅ Có | ❌ Không |
+| **Ví dụ** | Đọc balance | Gửi donation | Lắng nghe donation mới | Load donation history |
+
+### 1.1.3. Luồng Dữ Liệu Giữa Các Tầng
+
+**Luồng dữ liệu từ trên xuống (User → Blockchain):**
+
+```
+User Input/Click
+    ↓
+UI Component (handle event)
+    ↓
+Custom Hook (business logic)
+    ↓
+Service Layer (create transaction)
+    ↓
+Ethers.js (encode & sign)
+    ↓
+Provider (RPC call)
+    ↓
+Blockchain Network (execute)
+    ↓
+Smart Contract (update state)
+```
+
+**Luồng dữ liệu từ dưới lên (Blockchain → User):**
+
+```
+Smart Contract (emit event / return value)
+    ↓
+Blockchain Network (logs / response)
+    ↓
+Provider (decode response / logs)
+    ↓
+Ethers.js (parse data)
+    ↓
+Service Layer (format data)
+    ↓
+Custom Hook (update store)
+    ↓
+State Management (Zustand store)
+    ↓
+UI Component (re-render)
+    ↓
+User sees updated data
+```
+
+**Luồng dữ liệu hai chiều (Bidirectional):**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    USER INTERFACE                        │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Components: User interactions, Display data      │  │
+│  └────────────────────┬──────────────────────────────┘  │
+│                       ↕                                  │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Hooks: Business logic, State management         │  │
+│  └────────────────────┬──────────────────────────────┘  │
+│                       ↕                                  │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Services: Blockchain interaction, Data format   │  │
+│  └────────────────────┬──────────────────────────────┘  │
+│                       ↕                                  │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Ethers.js: Encode/Decode, Sign transactions      │  │
+│  └────────────────────┬──────────────────────────────┘  │
+│                       ↕                                  │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Provider: RPC calls, Network communication        │  │
+│  └────────────────────┬──────────────────────────────┘  │
+│                       ↕                                  │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Blockchain: Execute, Store state, Emit events    │  │
+│  └───────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 1.1.4. Các Điểm Quan Trọng Trong Pipeline
+
+#### **1. Provider Selection Strategy (Chiến Lược Chọn Provider)**
+
+Hệ thống sử dụng **fallback mechanism** để đảm bảo luôn có provider:
+
+```
+Ưu tiên 1: Safe Wallet Provider
+    ↓ (nếu không có)
+Ưu tiên 2: MetaMask BrowserProvider
+    ↓ (nếu không có)
+Ưu tiên 3: Public RPC Provider (JsonRpcProvider)
+```
+
+**Lý do:**
+- **Safe Wallet**: Ưu tiên cao nhất vì cần multisig cho admin operations
+- **MetaMask**: User-friendly, dễ sử dụng cho donations
+- **Public RPC**: Fallback để đọc data khi không có ví kết nối
+
+**Code implementation:**
+```typescript
+export const getProvider = (): BrowserProvider | JsonRpcProvider => {
+  // 1. Safe Wallet (nếu đang trong Safe)
+  if (isSafeWallet && safeEthersProvider) {
+    return safeEthersProvider;
+  }
+  
+  // 2. MetaMask (nếu có window.ethereum)
+  if (window.ethereum) {
+    return new ethers.BrowserProvider(window.ethereum);
+  }
+  
+  // 3. Public RPC (fallback)
+  return getFallbackProvider();
+};
+```
+
+#### **2. Contract Instance Caching (Cache Contract Instance)**
+
+Hệ thống cache contract instances để tránh tạo lại nhiều lần:
+
+**Lợi ích:**
+- Giảm overhead khi tạo contract instance
+- Tối ưu performance
+- Đảm bảo consistency
+
+**Code implementation:**
+```typescript
+const contractCache = new Map<string, ethers.Contract>();
+
+export const getContract = (): Contract | null => {
+  // Check cache first
+  const cachedContract = contractCache.get(CONTRACT_ADDRESS);
+  if (cachedContract) {
+    return cachedContract;
+  }
+  
+  // Create new instance và cache
+  const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
+  contractCache.set(CONTRACT_ADDRESS, contract);
+  return contract;
+};
+```
+
+#### **3. Error Handling & Retry Logic (Xử Lý Lỗi & Retry)**
+
+Hệ thống có retry mechanism cho các operations quan trọng:
+
+**Ví dụ:** `getContractBalance()` có retry logic:
+```typescript
+const withRetry = async <T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  delay = 1000
+): Promise<T> => {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+      }
+    }
+  }
+  throw new Error('Max retries reached');
+};
+```
+
+**Lý do:**
+- RPC providers có thể tạm thời không available
+- Network latency có thể gây timeout
+- Retry giúp tăng reliability
+
+#### **4. State Management Flow (Luồng Quản Lý State)**
+
+State được quản lý theo pattern **unidirectional data flow**:
+
+```
+User Action
+    ↓
+Hook (business logic)
+    ↓
+Service (blockchain call)
+    ↓
+Response từ blockchain
+    ↓
+Hook format data
+    ↓
+Store update (Zustand)
+    ↓
+Component re-render
+```
+
+**Lợi ích:**
+- Dễ debug (data flow rõ ràng)
+- Predictable state updates
+- Dễ test từng layer
+
+#### **5. Event-Driven Updates (Cập Nhật Theo Sự Kiện)**
+
+Hệ thống sử dụng **event-driven architecture** để update UI real-time:
+
+**Flow:**
+1. Contract emit event khi có donation mới
+2. Frontend listen event qua `contract.on('donationReceived', callback)`
+3. Callback trigger `refreshData()`
+4. UI tự động update với data mới
+
+**Code:**
+```typescript
+useEffect(() => {
+  const contract = getContract();
+  if (!contract) return;
+
+  const onDonationReceived = () => {
+    refreshData(); // Refresh khi có donation mới
+  };
+
+  contract.on('donationReceived', onDonationReceived);
+  
+  return () => {
+    contract.off('donationReceived', onDonationReceived);
+  };
+}, []);
+```
+
+#### **6. Data Formatting Pipeline (Pipeline Format Dữ Liệu)**
+
+Dữ liệu từ blockchain luôn được format qua nhiều bước:
+
+```
+Blockchain Response (BigInt wei)
+    ↓
+ethers.formatEther() → String ETH
+    ↓
+parseFloat() → Number (nếu cần)
+    ↓
+toFixed(4) → Display format
+    ↓
+UI Display
+```
+
+**Ví dụ:**
+```typescript
+// Blockchain trả về: 5000000000000000000n (wei)
+const balanceWei = await contract.getBalance();
+
+// Format sang ETH: "5.0"
+const balanceEth = ethers.formatEther(balanceWei);
+
+// Format để hiển thị: "5.0000"
+const displayBalance = parseFloat(balanceEth).toFixed(4);
+```
+
+#### **7. Transaction Lifecycle (Vòng Đời Transaction)**
+
+Mỗi write operation trải qua các giai đoạn:
+
+```
+1. Pending (Chờ ký)
+   - Transaction được tạo
+   - Chờ user approve trong wallet
+   
+2. Signed (Đã ký)
+   - Transaction được ký với private key
+   - Có transaction hash
+   
+3. Broadcast (Đã gửi)
+   - Transaction được broadcast lên network
+   - Vào mempool
+   
+4. Pending (Chờ mine)
+   - Miners chọn transaction
+   - Chờ được mine vào block
+   
+5. Confirmed (Đã confirm)
+   - Transaction được mine vào block
+   - Có block number
+   - Chờ confirmations (1-2 blocks)
+   
+6. Finalized (Hoàn thành)
+   - Transaction đã được confirm đủ
+   - State đã được update
+   - Events đã được emit
+```
+
+**Code tracking:**
+```typescript
+const tx = await signer.sendTransaction({...});
+// tx.hash: Transaction hash (ngay sau khi ký)
+
+await tx.wait(); // Đợi transaction được mine
+// tx.blockNumber: Block number khi được mine
+// tx.confirmations: Số confirmations
+```
+
+### 1.1.5. Tóm Tắt Pipeline Chính
+
+**Pipeline đọc dữ liệu (Read):**
+- **Bước:** Component → Hook → Service → Provider → Blockchain → Response → Format → Store → UI
+- **Thời gian:** ~100-500ms
+- **Đặc điểm:** Nhanh, không cần ví, không tốn gas
+
+**Pipeline ghi dữ liệu (Write):**
+- **Bước:** Component → Hook → Service → Wallet Popup → Sign → Broadcast → Mine → Confirm → Event → Refresh → UI
+- **Thời gian:** ~15-60s
+- **Đặc điểm:** Chậm, cần ví, tốn gas, cần user approval
+
+**Pipeline lắng nghe events:**
+- **Bước:** Hook Setup → Register Listener → Polling → Detect Event → Decode → Callback → Refresh → UI
+- **Thời gian:** ~4-12s (detection)
+- **Đặc điểm:** Real-time, tự động update, không tốn gas
+
+**Pipeline query historical events:**
+- **Bước:** Component → Hook → Service → RPC Query → Decode → Format → Store → UI
+- **Thời gian:** ~1-5s
+- **Đặc điểm:** Load tất cả events, không real-time, không tốn gas
 
 ### 1.2. Luồng Dữ Liệu Tổng Quan
 
@@ -1005,6 +1925,9 @@ UI Update
 ---
 
 **Tài liệu này được tạo để giúp người mới bắt đầu hiểu cách frontend tương tác với Ethereum blockchain. Nếu có câu hỏi, hãy tham khảo code trong project hoặc tài liệu chính thức của các thư viện.**
+
+
+
 
 
 

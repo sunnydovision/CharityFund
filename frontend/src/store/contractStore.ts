@@ -18,6 +18,7 @@ export interface Transfer {
 interface ContractState {
   contractBalance: string;
   safeBalance: string;
+  safeAddress: string;
   threshold: string;
   totalReceived: string;
   totalTransferred: string;
@@ -28,6 +29,7 @@ interface ContractState {
 
   setContractBalance: (balance: string) => void;
   setSafeBalance: (balance: string) => void;
+  setSafeAddress: (address: string) => void;
   setThreshold: (threshold: string) => void;
   setTotalReceived: (total: string) => void;
   setTotalTransferred: (total: string) => void;
@@ -42,6 +44,7 @@ interface ContractState {
 export const useContractStore = create<ContractState>((set, get) => ({
   contractBalance: '0',
   safeBalance: '0',
+  safeAddress: '',
   threshold: '5',
   totalReceived: '0',
   totalTransferred: '0',
@@ -55,6 +58,9 @@ export const useContractStore = create<ContractState>((set, get) => ({
 
   setSafeBalance: (balance) =>
     set({ safeBalance: balance }),
+
+  setSafeAddress: (address) =>
+    set({ safeAddress: address }),
 
   setThreshold: (threshold) =>
     set({ threshold }),

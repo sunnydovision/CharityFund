@@ -15,13 +15,14 @@ import SecurityIcon from '@mui/icons-material/Security';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useContract } from '../hooks/useContract';
-import { CONTRACT_ADDRESS, SAFE_ADDRESS } from '../constants/contractAddress';
+import { CONTRACT_ADDRESS } from '../constants/contractAddress';
 import { getCurrentNetworkConfig } from '../constants/networkConfig';
 
 export const ContractInfo: React.FC = () => {
   const {
     contractBalance,
     safeBalance,
+    safeAddress,
     threshold,
     totalReceived,
     totalTransferred,
@@ -173,15 +174,23 @@ export const ContractInfo: React.FC = () => {
             <Typography variant="body2" color="text.secondary">
               Safe Wallet:
             </Typography>
-            <Chip
-              label={formatAddress(SAFE_ADDRESS)}
-              size="small"
-              onClick={() => openInExplorer(SAFE_ADDRESS)}
-              sx={{ cursor: 'pointer' }}
-            />
-            <IconButton size="small" onClick={() => copyToClipboard(SAFE_ADDRESS)}>
-              <ContentCopyIcon fontSize="small" />
-            </IconButton>
+            {safeAddress ? (
+              <>
+                <Chip
+                  label={formatAddress(safeAddress)}
+                  size="small"
+                  onClick={() => openInExplorer(safeAddress)}
+                  sx={{ cursor: 'pointer' }}
+                />
+                <IconButton size="small" onClick={() => copyToClipboard(safeAddress)}>
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                Loading...
+              </Typography>
+            )}
           </Box>
 
           <Box display="flex" alignItems="center" gap={1} mt={1}>

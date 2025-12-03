@@ -1,6 +1,6 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useContractStore } from '../store/contractStore';
-import { getContract, getContractBalance, getEthBalance } from '../services/ethers.service';
+import { getContract, getContractBalance, getEthBalance, getContractSafeAddress, clearContractCache } from '../services/ethers.service';
 import { CONTRACT_ADDRESS, SAFE_ADDRESS } from '../constants/contractAddress';
 import { ethers } from 'ethers';
 
@@ -8,6 +8,7 @@ export const useContract = () => {
   const {
     contractBalance,
     safeBalance,
+    safeAddress,
     threshold,
     totalReceived,
     totalTransferred,
@@ -17,6 +18,7 @@ export const useContract = () => {
     error,
     setContractBalance,
     setSafeBalance,
+    setSafeAddress,
     setThreshold,
     setTotalReceived,
     setTotalTransferred,
@@ -65,10 +67,30 @@ export const useContract = () => {
       const totalTransferredFormatted = ethers.formatEther(totalTransferredValue);
       setTotalTransferred(totalTransferredFormatted);
 
-      // Get Safe balance
-      if (SAFE_ADDRESS) {
+      // Get Safe address from contract
+      const contractSafeAddress = await getContractSafeAddress();
+      console.log('Safe address from contract:', contractSafeAddress);
+      
+      if (contractSafeAddress) {
+        // Check if Safe address has changed
+        const currentSafeAddress = safeAddress;
+        if (currentSafeAddress && currentSafeAddress.toLowerCase() !== contractSafeAddress.toLowerCase()) {
+          console.log('Safe address changed! Old:', currentSafeAddress, 'New:', contractSafeAddress);
+        }
+        
+        setSafeAddress(contractSafeAddress);
+        // Get Safe balance using the address from contract
+        const safeBalanceValue = await getEthBalance(contractSafeAddress);
+        console.log('Safe balance for', contractSafeAddress, ':', safeBalanceValue, 'ETH');
+        setSafeBalance(safeBalanceValue);
+      } else if (SAFE_ADDRESS) {
+        // Fallback to constant if contract doesn't return address
+        console.log('Using fallback SAFE_ADDRESS:', SAFE_ADDRESS);
+        setSafeAddress(SAFE_ADDRESS);
         const safeBalanceValue = await getEthBalance(SAFE_ADDRESS);
         setSafeBalance(safeBalanceValue);
+      } else {
+        console.warn('No Safe address found from contract or constants');
       }
 
       setLoading(false);
@@ -77,7 +99,7 @@ export const useContract = () => {
       setError(err.message || 'Failed to load contract data');
       setLoading(false);
     }
-  }, [setContractBalance, setSafeBalance, setThreshold, setTotalReceived, setTotalTransferred, setLoading, setError]);
+  }, [setContractBalance, setSafeBalance, setSafeAddress, setThreshold, setTotalReceived, setTotalTransferred, setLoading, setError]);
 
   const loadDonations = useCallback(async () => {
     if (!CONTRACT_ADDRESS) return;
@@ -193,29 +215,75 @@ export const useContract = () => {
       refreshData();
     };
 
+    const onSafeUpdated = () => {
+      // Refresh data when Safe address is updated
+      console.log('Safe address updated, refreshing all data...');
+      refreshData();
+    };
+
     contract.on('donationReceived', onDonationReceived);
     contract.on('donationFallback', onDonationReceived);
     contract.on('autoTransfer', onAutoTransfer);
     contract.on('manualTransfer', onAutoTransfer);
+    contract.on('SafeUpdated', onSafeUpdated);
 
     return () => {
       contract.off('donationReceived', onDonationReceived);
       contract.off('donationFallback', onDonationReceived);
       contract.off('autoTransfer', onAutoTransfer);
       contract.off('manualTransfer', onAutoTransfer);
+      contract.off('SafeUpdated', onSafeUpdated);
     };
   }, [refreshData]);
 
-  // Load data on mount
+  // Watch for safeAddress changes and refresh Safe balance
+  useEffect(() => {
+    if (safeAddress) {
+      // When Safe address changes, refresh Safe balance
+      const refreshSafeBalance = async () => {
+        try {
+          const { getEthBalance } = await import('../services/ethers.service');
+          const safeBalanceValue = await getEthBalance(safeAddress);
+          setSafeBalance(safeBalanceValue);
+        } catch (err) {
+          console.error('Error refreshing Safe balance:', err);
+        }
+      };
+      refreshSafeBalance();
+    }
+  }, [safeAddress, setSafeBalance]);
+
+  // Track previous contract address to detect changes
+  const prevContractAddressRef = useRef<string | null>(null);
+
+  // Load data on mount and when CONTRACT_ADDRESS changes
   useEffect(() => {
     if (CONTRACT_ADDRESS) {
+      // Check if contract address has changed
+      if (prevContractAddressRef.current && prevContractAddressRef.current !== CONTRACT_ADDRESS) {
+        console.log('Contract address changed! Old:', prevContractAddressRef.current, 'New:', CONTRACT_ADDRESS);
+        // Clear contract cache when address changes
+        clearContractCache();
+        // Clear store data to force fresh load
+        setContractBalance('0');
+        setSafeBalance('0');
+        setSafeAddress('');
+        setTotalReceived('0');
+        setTotalTransferred('0');
+        setDonations([]);
+        setTransfers([]);
+      }
+      
+      console.log('Loading contract data for:', CONTRACT_ADDRESS);
+      prevContractAddressRef.current = CONTRACT_ADDRESS;
       loadAllData();
     }
-  }, [CONTRACT_ADDRESS]);
+  }, [CONTRACT_ADDRESS, loadAllData, setContractBalance, setSafeBalance, setSafeAddress, setTotalReceived, setTotalTransferred, setDonations, setTransfers]);
 
   return {
     contractBalance,
     safeBalance,
+    safeAddress,
     threshold,
     totalReceived,
     totalTransferred,

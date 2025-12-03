@@ -16,10 +16,12 @@ import {
 } from '@mui/material';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import SendIcon from '@mui/icons-material/Send';
-import { manualTransferToSafe, getProvider, isConnectedToSafe } from '../services/ethers.service';
+import { manualTransferToSafe, getProvider, isConnectedToSafe, updateSafeAddress } from '../services/ethers.service';
 import { useWallet } from '../hooks/useWallet';
 import { useContract } from '../hooks/useContract';
-import { SAFE_ADDRESS } from '../constants/contractAddress';
+import { ethers } from 'ethers';
+import UpdateIcon from '@mui/icons-material/Update';
+import SecurityIcon from '@mui/icons-material/Security';
 
 export const AdminDashboard: React.FC = () => {
   const [isTransferring, setIsTransferring] = useState(false);
@@ -34,8 +36,17 @@ export const AdminDashboard: React.FC = () => {
   const [amountEth, setAmountEth] = useState<string>('');
   const [isValidAmount, setIsValidAmount] = useState<boolean>(true);
 
+  // Update Safe address state
+  const [newSafeAddress, setNewSafeAddress] = useState<string>('');
+  const [isUpdatingSafe, setIsUpdatingSafe] = useState(false);
+  const [updateSafeError, setUpdateSafeError] = useState<string | null>(null);
+  const [updateSafeSuccess, setUpdateSafeSuccess] = useState(false);
+  const [updateSafeTxHash, setUpdateSafeTxHash] = useState('');
+  const [confirmUpdateDialog, setConfirmUpdateDialog] = useState(false);
+  const [isValidSafeAddress, setIsValidSafeAddress] = useState(true);
+
   const { isConnected, address } = useWallet();
-  const { contractBalance, threshold, refreshData } = useContract();
+  const { contractBalance, safeAddress, threshold, refreshData } = useContract();
 
   useEffect(() => {
     const checkIfSafeOwner = async () => {
@@ -52,8 +63,8 @@ export const AdminDashboard: React.FC = () => {
         
         if (isUsingSafeWallet) {
           // Khi dùng Safe Wallet, address là Safe address
-          // Check xem address có match với SAFE_ADDRESS không
-          if (SAFE_ADDRESS && address.toLowerCase() === SAFE_ADDRESS.toLowerCase()) {
+          // Check xem address có match với safeAddress từ contract không
+          if (safeAddress && address.toLowerCase() === safeAddress.toLowerCase()) {
             // Đây là Safe address - có quyền gọi updateSafe()
             setIsSafeOwner(true);
             setSafeOwners([]); // Không cần load owners
@@ -63,6 +74,12 @@ export const AdminDashboard: React.FC = () => {
         }
 
         // Nếu không dùng Safe Wallet, check xem có phải owner không
+        if (!safeAddress) {
+          setIsSafeOwner(false);
+          setIsCheckingOwner(false);
+          return;
+        }
+
         const provider = getProvider();
         if (!provider) {
           setIsSafeOwner(false);
@@ -72,7 +89,7 @@ export const AdminDashboard: React.FC = () => {
 
         const { ethers } = await import('ethers');
         const safeABI = ['function getOwners() external view returns (address[])'];
-        const safeContract = new ethers.Contract(SAFE_ADDRESS, safeABI, provider);
+        const safeContract = new ethers.Contract(safeAddress, safeABI, provider);
         const owners = await safeContract.getOwners();
 
         setSafeOwners(owners);
@@ -83,9 +100,9 @@ export const AdminDashboard: React.FC = () => {
         );
         
         // Hoặc address có phải là Safe address không
-        const isSafeAddress = SAFE_ADDRESS && address.toLowerCase() === SAFE_ADDRESS.toLowerCase();
+        const isSafeAddr = safeAddress && address.toLowerCase() === safeAddress.toLowerCase();
         
-        setIsSafeOwner(isOwner || isSafeAddress);
+        setIsSafeOwner(isOwner || isSafeAddr);
       } catch (error) {
         console.error('Error checking Safe owner:', error);
         setIsSafeOwner(false);
@@ -95,7 +112,7 @@ export const AdminDashboard: React.FC = () => {
     };
 
     checkIfSafeOwner();
-  }, [isConnected, address]);
+  }, [isConnected, address, safeAddress]);
 
   const validateAmount = (value: string): boolean => {
     const amount = parseFloat(value);
@@ -166,6 +183,68 @@ export const AdminDashboard: React.FC = () => {
 
   const handleCloseSuccess = () => setSuccess(false);
 
+  // Update Safe address handlers
+  const validateSafeAddress = (addr: string): boolean => {
+    if (!addr) return false;
+    try {
+      return ethers.isAddress(addr);
+    } catch {
+      return false;
+    }
+  };
+
+  const handleSafeAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value.trim();
+    setNewSafeAddress(value);
+    setIsValidSafeAddress(value === '' || validateSafeAddress(value));
+    setUpdateSafeError(null);
+  };
+
+  const handleUpdateSafeClick = () => {
+    setUpdateSafeError(null);
+    
+    if (!newSafeAddress) {
+      setUpdateSafeError('Please enter a new Safe address');
+      return;
+    }
+
+    if (!isValidSafeAddress) {
+      setUpdateSafeError('Invalid Ethereum address format');
+      return;
+    }
+
+    if (newSafeAddress.toLowerCase() === safeAddress?.toLowerCase()) {
+      setUpdateSafeError('New Safe address must be different from current Safe address');
+      return;
+    }
+
+    setConfirmUpdateDialog(true);
+  };
+
+  const handleUpdateSafeConfirm = async () => {
+    setConfirmUpdateDialog(false);
+    setIsUpdatingSafe(true);
+    setUpdateSafeError(null);
+
+    try {
+      const hash = await updateSafeAddress(newSafeAddress);
+      setUpdateSafeTxHash(hash);
+      setUpdateSafeSuccess(true);
+      setNewSafeAddress(''); // Clear form
+
+      // Refresh data after a moment to get updated Safe address
+      setTimeout(() => {
+        refreshData();
+      }, 2000);
+    } catch (err: any) {
+      setUpdateSafeError(err?.message || 'Failed to update Safe address. Please try again.');
+    } finally {
+      setIsUpdatingSafe(false);
+    }
+  };
+
+  const handleCloseUpdateSuccess = () => setUpdateSafeSuccess(false);
+
   if (!isConnected) {
     return (
       <Card sx={{ mb: 3 }}>
@@ -202,7 +281,7 @@ export const AdminDashboard: React.FC = () => {
               <br />
               <strong>Your Address:</strong> {address}
               <br />
-              <strong>Safe Address:</strong> {SAFE_ADDRESS}
+              <strong>Safe Address:</strong> {safeAddress || 'Loading...'}
               <br />
               <strong>Safe Owners:</strong>{' '}
               {safeOwners.length > 0
@@ -276,6 +355,63 @@ export const AdminDashboard: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Update Safe Address Form */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box display="flex" alignItems="center" gap={1} mb={2}>
+            <SecurityIcon color="primary" />
+            <Typography variant="h6">Update Safe Address</Typography>
+          </Box>
+
+          {updateSafeError && <Alert severity="error" sx={{ mb: 2 }}>{updateSafeError}</Alert>}
+
+          <Box sx={{ p: 2, bgcolor: 'info.light', borderRadius: 1, mb: 2 }}>
+            <Typography variant="body2" color="info.contrastText" gutterBottom>
+              Current Safe Address
+            </Typography>
+            <Typography variant="body1" color="info.contrastText" sx={{ wordBreak: 'break-all' }}>
+              {safeAddress || 'Loading...'}
+            </Typography>
+          </Box>
+
+          <TextField
+            label="New Safe Address"
+            placeholder="0x..."
+            fullWidth
+            value={newSafeAddress}
+            onChange={handleSafeAddressChange}
+            sx={{ mb: 2 }}
+            error={!isValidSafeAddress && newSafeAddress !== ''}
+            helperText={
+              !isValidSafeAddress && newSafeAddress !== ''
+                ? 'Invalid Ethereum address format'
+                : 'Enter the new Safe wallet address'
+            }
+          />
+
+          <Typography variant="body2" color="text.secondary" paragraph>
+            <strong>Update Safe Address:</strong> Change the Safe wallet address that receives funds
+            from the contract. Only the current Safe address can update this.
+          </Typography>
+
+          <Button
+            variant="contained"
+            color="primary"
+            fullWidth
+            onClick={handleUpdateSafeClick}
+            disabled={
+              isUpdatingSafe ||
+              !isValidSafeAddress ||
+              !newSafeAddress ||
+              newSafeAddress.toLowerCase() === safeAddress?.toLowerCase()
+            }
+            startIcon={isUpdatingSafe ? <CircularProgress size={20} /> : <UpdateIcon />}
+          >
+            {isUpdatingSafe ? 'Processing Update...' : 'UPDATE SAFE'}
+          </Button>
+        </CardContent>
+      </Card>
+
       <Dialog open={confirmDialog} onClose={() => setConfirmDialog(false)}>
         <DialogTitle>Confirm Transfer</DialogTitle>
         <DialogContent>
@@ -286,7 +422,7 @@ export const AdminDashboard: React.FC = () => {
             This will withdraw funds from the contract and send them to the Safe address.
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            Safe address: {SAFE_ADDRESS}
+            Safe address: {safeAddress || 'Loading...'}
           </Typography>
           <Typography variant="body2" color="warning.main" sx={{ mt: 1, fontWeight: 'bold' }}>
             ⚠️ Contract has "onlySafe" modifier - requires Safe Wallet and multisig approval.
@@ -299,6 +435,39 @@ export const AdminDashboard: React.FC = () => {
           <Button onClick={() => setConfirmDialog(false)}>Cancel</Button>
           <Button onClick={handleTransferConfirm} variant="contained" color="primary">
             Confirm Transfer
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirm Update Safe Dialog */}
+      <Dialog open={confirmUpdateDialog} onClose={() => setConfirmUpdateDialog(false)}>
+        <DialogTitle>Confirm Safe Address Update</DialogTitle>
+        <DialogContent>
+          <Typography gutterBottom>
+            Are you sure you want to update the Safe address?
+          </Typography>
+          <Box sx={{ mt: 2, mb: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              <strong>Current Safe Address:</strong>
+            </Typography>
+            <Typography variant="body2" sx={{ wordBreak: 'break-all', mb: 2 }}>
+              {safeAddress || 'Loading...'}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              <strong>New Safe Address:</strong>
+            </Typography>
+            <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+              {newSafeAddress}
+            </Typography>
+          </Box>
+          <Typography variant="body2" color="warning.main" sx={{ mt: 2, fontWeight: 'bold' }}>
+            ⚠️ Contract has "onlySafe" modifier - only current Safe address can call this function.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmUpdateDialog(false)}>Cancel</Button>
+          <Button onClick={handleUpdateSafeConfirm} variant="contained" color="primary">
+            Confirm Update
           </Button>
         </DialogActions>
       </Dialog>
@@ -329,6 +498,43 @@ export const AdminDashboard: React.FC = () => {
               size="small" 
               color="inherit" 
               href={`https://etherscan.io/tx/${txHash}`} 
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{ mt: 1, color: 'white', textDecoration: 'underline' }}
+            >
+              View on Etherscan
+            </Button>
+          </Box>
+        </Alert>
+      </Snackbar>
+
+      {/* Update Safe Success Snackbar */}
+      <Snackbar
+        open={updateSafeSuccess}
+        autoHideDuration={10000}
+        onClose={handleCloseUpdateSuccess}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={handleCloseUpdateSuccess}
+          severity="success"
+          sx={{ width: '100%' }}
+          variant="filled"
+        >
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>
+              Safe Address Update Successful!
+            </Typography>
+            <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+              Safe address has been updated successfully.
+            </Typography>
+            <Typography variant="caption" sx={{ display: 'block', mt: 1, wordBreak: 'break-all' }}>
+              TX: {updateSafeTxHash}
+            </Typography>
+            <Button
+              size="small"
+              color="inherit"
+              href={`https://sepolia.etherscan.io/tx/${updateSafeTxHash}`}
               target="_blank"
               rel="noopener noreferrer"
               sx={{ mt: 1, color: 'white', textDecoration: 'underline' }}

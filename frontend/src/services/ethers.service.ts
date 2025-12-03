@@ -25,6 +25,12 @@ const getNextRpcUrl = (): string => {
 // Cache for contract instances
 const contractCache = new Map<string, ethers.Contract>();
 
+// Clear contract cache (useful when contract address changes)
+export const clearContractCache = () => {
+  contractCache.clear();
+  console.log('Contract cache cleared');
+};
+
 // Safe Wallet SDK instance
 let safeSdk: SafeAppsSDK | null = null;
 let safeProvider: SafeAppProvider | null = null;
@@ -320,6 +326,7 @@ export const getContract = (): Contract | null => {
   // Check cache first
   const cachedContract = contractCache.get(CONTRACT_ADDRESS);
   if (cachedContract) {
+    console.log('Using cached contract for:', CONTRACT_ADDRESS);
     return cachedContract;
   }
   
@@ -327,6 +334,7 @@ export const getContract = (): Contract | null => {
   if (!provider) return null;
   
   try {
+    console.log('Creating new contract instance for:', CONTRACT_ADDRESS);
     const contract = new ethers.Contract(CONTRACT_ADDRESS, CHARITY_FUND_ABI, provider);
     contractCache.set(CONTRACT_ADDRESS, contract);
     return contract;
@@ -672,6 +680,73 @@ export const isAboveThreshold = async (): Promise<boolean> => {
   }
 };
 
+
+// Update Safe address in contract
+// Gọi trực tiếp hàm updateSafe từ contract
+export async function updateSafeAddress(newSafeAddress: string): Promise<string> {
+  if (!CONTRACT_ADDRESS) {
+    throw new Error('Contract address not set');
+  }
+
+  // Validate address format
+  if (!ethers.isAddress(newSafeAddress)) {
+    throw new Error('Invalid Safe address format');
+  }
+
+  try {
+    // Lấy contract với signer để gọi trực tiếp
+    const contract = await getContractWithSigner();
+    if (!contract) {
+      throw new Error('Failed to get contract with signer. Please connect your wallet.');
+    }
+
+    console.log('📝 Updating Safe address...');
+    console.log(`New Safe Address: ${newSafeAddress}`);
+    console.log('📞 Function: updateSafe(address _newSafeAddress)');
+    
+    // Gọi trực tiếp function updateSafe
+    const tx = await (contract as any).updateSafe(newSafeAddress);
+    console.log('⏳ Transaction sent, waiting for confirmation...');
+    console.log('TX Hash:', tx.hash);
+    
+    // Đợi transaction được confirm
+    const receipt = await tx.wait();
+    console.log('✅ Safe address updated successfully!');
+    console.log('Block:', receipt.blockNumber);
+    
+    return tx.hash;
+  } catch (error: any) {
+    console.error('❌ Error updating Safe address:', error);
+    throw new Error(`Failed to update Safe address: ${error?.message || error}`);
+  }
+}
+
+// Get Safe address from contract
+export const getContractSafeAddress = async (): Promise<string | null> => {
+  const contract = getContract();
+  if (!contract) {
+    console.warn('getContractSafeAddress: No contract instance');
+    return null;
+  }
+
+  try {
+    // Try safeAddress() first (newer contract)
+    let safeAddr: string;
+    try {
+      safeAddr = await (contract as any).safeAddress();
+      console.log('getContractSafeAddress: Read safeAddress() =', safeAddr);
+    } catch (err) {
+      console.log('getContractSafeAddress: safeAddress() failed, trying safe()...', err);
+      // Fallback to safe() if safeAddress() doesn't exist
+      safeAddr = await (contract as any).safe();
+      console.log('getContractSafeAddress: Read safe() =', safeAddr);
+    }
+    return safeAddr;
+  } catch (error) {
+    console.error('Error getting Safe address from contract:', error);
+    return null;
+  }
+};
 
 // NEW: amountEth is a string like "0.005"
 // Function này lấy tiền TỪ contract và gửi TỚI Safe address
