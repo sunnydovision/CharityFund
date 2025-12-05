@@ -39,6 +39,7 @@ export default defineConfig({
     },
   },
   server: {
+    port: 5174,
     headers: {
       // Cho phép được embed bởi Safe
       'Content-Security-Policy': "frame-ancestors 'self' https://app.safe.global https://*.safe.global",

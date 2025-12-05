@@ -66,28 +66,7 @@ export const ContractInfo: React.FC = () => {
         {isLoading && <LinearProgress sx={{ mb: 2 }} />}
 
         <Grid container spacing={2} mb={3}>
-          <Grid item xs={12} md={4}>
-            <Box
-              sx={{
-                p: 2,
-                bgcolor: 'primary.light',
-                borderRadius: 1,
-                height: '100%',
-              }}
-            >
-              <Typography variant="body2" color="primary.contrastText" gutterBottom>
-                Current Balance
-              </Typography>
-              <Typography variant="h4" color="primary.contrastText">
-                {parseFloat(contractBalance).toFixed(4)} ETH
-              </Typography>
-              <Typography variant="caption" color="primary.contrastText">
-                of {parseFloat(threshold).toFixed(1)} ETH threshold
-              </Typography>
-            </Box>
-          </Grid>
-
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={6}>
             <Box
               sx={{
                 p: 2,
@@ -108,7 +87,7 @@ export const ContractInfo: React.FC = () => {
             </Box>
           </Grid>
 
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={6}>
             <Box
               sx={{
                 p: 2,
@@ -133,7 +112,7 @@ export const ContractInfo: React.FC = () => {
         <Box mb={3}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
             <Typography variant="body2" color="text.secondary">
-              Progress to Auto-Transfer
+              Progress to Auto-Transfer: {parseFloat(contractBalance).toFixed(4)} / {parseFloat(threshold).toFixed(4)} ETH
             </Typography>
             <Typography variant="body2" fontWeight="bold">
               {progress.toFixed(1)}%
